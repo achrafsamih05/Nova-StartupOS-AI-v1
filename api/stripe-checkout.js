@@ -1,63 +1,104 @@
 // =====================================================================
-// Nova StartupOS AI — Stripe Checkout Session Generator (Vercel / Node.js)
+// Nova StartupOS AI — Stripe Checkout Session Generator (v2)
 // ---------------------------------------------------------------------
-// Route:  POST /api/stripe-checkout   (mapped in vercel.json)
+// Route:  POST /api/stripe-checkout
 //
-// Accepts { priceId, userId } from the frontend, creates a secure Stripe
-// Checkout Session server-side (the secret key never leaves the server),
-// and returns { url } so main.js can redirect the user to Stripe.
+// Hardening:
+//   • Authenticated via Supabase JWT — no anonymous checkouts.
+//   • Plan + cycle resolved server-side from STRIPE_PRICE_* env vars,
+//     so the browser cannot inject arbitrary Stripe Price IDs.
+//   • Reuses the customer's stripe_customer_id when known.
+//   • Audit logged.
 // =====================================================================
 
 const Stripe = require('stripe');
+const {
+  applyCors, handlePreflight, jsonError, readJsonBody, verifyAuth,
+  getServiceClient, recordAudit, clientIp,
+} = require('./_lib/auth');
 
-// Secret key is read ONLY from Vercel env vars — never hardcoded/exposed.
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-// Public site URL used to build success/cancel redirects.
 const SITE_URL = process.env.SITE_URL || 'https://nova-startupos-ai.vercel.app';
 
-module.exports = async (req, res) => {
-  // ---- CORS preflight ----
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    return res.status(204).end();
-  }
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+// Server-controlled mapping. Frontend sends only { plan, cycle }.
+const PRICE_MAP = {
+  pro:     { monthly: process.env.STRIPE_PRICE_PRO_MONTHLY,     yearly: process.env.STRIPE_PRICE_PRO_YEARLY },
+  startup: { monthly: process.env.STRIPE_PRICE_STARTUP_MONTHLY, yearly: process.env.STRIPE_PRICE_STARTUP_YEARLY },
+};
 
-  if (!STRIPE_SECRET_KEY) {
-    return res.status(500).json({ error: 'Stripe is not configured (missing STRIPE_SECRET_KEY).' });
-  }
+function planTierFromKey(key) {
+  if (key === 'pro') return 'Pro';
+  if (key === 'startup') return 'Startup';
+  return null;
+}
+
+module.exports = async (req, res) => {
+  if (handlePreflight(req, res, 'POST, OPTIONS')) return;
+  if (req.method !== 'POST') return jsonError(res, 405, 'Method not allowed');
+  if (!STRIPE_SECRET_KEY) return jsonError(res, 500, 'Stripe is not configured.');
+
+  const auth = await verifyAuth(req);
+  if (!auth) return jsonError(res, 401, 'Authentication required.');
+  const { profile } = auth;
+  const ip = clientIp(req);
+
+  const body = await readJsonBody(req);
+  const plan = String(body.plan || '').toLowerCase();
+  const cycle = String(body.cycle || 'monthly').toLowerCase();
+  if (!PRICE_MAP[plan]) return jsonError(res, 400, 'Unknown plan.');
+  const priceId = PRICE_MAP[plan][cycle];
+  if (!priceId) return jsonError(res, 400, `Price ID for ${plan}/${cycle} is not configured on the server.`);
+
+  const planTier = planTierFromKey(plan);
 
   try {
     const stripe = Stripe(STRIPE_SECRET_KEY);
+    const admin = getServiceClient();
 
-    // ---- Parse request body ----
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const priceId = (body.priceId || '').toString();
-    const userId = (body.userId || '').toString();
+    // Reuse an existing Stripe customer for this user if we already have one.
+    const { data: subRow } = await admin
+      .from('subscriptions')
+      .select('stripe_customer_id')
+      .eq('user_id', profile.id)
+      .not('stripe_customer_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    if (!priceId) return res.status(400).json({ error: 'priceId is required.' });
-    if (!userId) return res.status(400).json({ error: 'userId is required.' });
-
-    // ---- Create the Checkout Session (subscription mode) ----
-    const session = await stripe.checkout.sessions.create({
+    const sessionOpts = {
       mode: 'subscription',
       payment_method_types: ['card'],
       line_items: [{ price: priceId, quantity: 1 }],
-      // Tie the session back to our Supabase user for webhook reconciliation.
-      client_reference_id: userId,
-      metadata: { supabase_user_id: userId },
+      client_reference_id: profile.id,
+      metadata: {
+        supabase_user_id: profile.id,
+        plan_tier: planTier,
+        billing_cycle: cycle,
+      },
+      subscription_data: {
+        metadata: {
+          supabase_user_id: profile.id,
+          plan_tier: planTier,
+        },
+      },
       success_url: SITE_URL + '/?billing=success&session_id={CHECKOUT_SESSION_ID}',
-      cancel_url: SITE_URL + '/?billing=cancelled'
-    });
+      cancel_url:  SITE_URL + '/?billing=cancelled',
+      allow_promotion_codes: true,
+    };
 
-    // Return the hosted Checkout URL for the frontend to redirect to.
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (subRow && subRow.stripe_customer_id) {
+      sessionOpts.customer = subRow.stripe_customer_id;
+    } else if (profile.email) {
+      sessionOpts.customer_email = profile.email;
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionOpts);
+
+    await recordAudit(profile, 'billing.checkout_started', 'subscriptions', session.id,
+                      { plan: planTier, cycle }, ip);
+
     return res.status(200).json({ url: session.url, id: session.id });
   } catch (err) {
-    return res.status(500).json({ error: (err && err.message) || 'Could not create checkout session.' });
+    return jsonError(res, 500, err.message || 'Could not create checkout session.');
   }
 };

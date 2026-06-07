@@ -1,11 +1,14 @@
 {
   "name": "nova-startupos-ai",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Nova StartupOS AI - static frontend with Vercel serverless backend (AI streaming proxy + Stripe).",
+  "description": "Nova StartupOS AI - static frontend with Vercel serverless backend (AI streaming proxy + Stripe + webhooks).",
   "type": "commonjs",
   "engines": {
     "node": ">=18.x"
+  },
+  "scripts": {
+    "test": "node tests/run.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

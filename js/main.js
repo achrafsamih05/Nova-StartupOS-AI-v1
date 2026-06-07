@@ -94,25 +94,22 @@ function doLogin() {
   if (!pass) return showErrLogin('Please enter your password.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErrLogin('Please enter a valid email address.');
   if (pass.length < 6) return showErrLogin('Password must be at least 6 characters.');
-  setLoading('loginBtn', true);
-  // Try the real backend first; fall back to local demo if unreachable.
-  if (window.NovaApi) {
-    NovaApi.login(email, pass)
-      .then(user => { setLoading('loginBtn', false); loginSuccess({ name: user.name, email: user.email, plan: user.plan || 'Free Plan', backend: true, is_admin: user.is_admin, is_super_admin: user.is_super_admin, roles: user.roles }); })
-      .catch(err => {
-        setLoading('loginBtn', false);
-        if (err.status === 422 || err.status === 401) return showErrLogin('Invalid email or password.');
-        // backend unreachable -> demo fallback
-        const name = email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        loginSuccess({ name, email, plan: 'Pro Plan' });
-      });
-    return;
+  if (!window.NovaApi || !window.NovaApi.supabase) {
+    return showErrLogin('Authentication is not configured. Please contact your administrator.');
   }
-  setTimeout(() => {
-    setLoading('loginBtn', false);
-    const name = email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    loginSuccess({ name, email, plan: 'Pro Plan' });
-  }, 800);
+  setLoading('loginBtn', true);
+  // Real auth only — no demo fallback. Failure is failure.
+  NovaApi.login(email, pass)
+    .then(user => {
+      setLoading('loginBtn', false);
+      loginSuccess(Object.assign({ backend: true }, user));
+    })
+    .catch(err => {
+      setLoading('loginBtn', false);
+      if (err.status === 403) return showErrLogin(err.message || 'Account disabled.');
+      if (err.status === 422 || err.status === 401) return showErrLogin('Invalid email or password.');
+      return showErrLogin(err.message || 'Could not sign you in. Please try again.');
+    });
 }
 function doSignup() {
   const name = document.getElementById('signupName').value.trim();
@@ -123,25 +120,35 @@ function doSignup() {
   if (!email) return showErrSignup('Please enter your email address.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showErrSignup('Please enter a valid email address.');
   if (pass.length < 8) return showErrSignup('Password must be at least 8 characters.');
-  setLoading('signupBtn', true);
-  if (window.NovaApi) {
-    NovaApi.register({ name, email, password: pass, password_confirmation: pass })
-      .then(user => { setLoading('signupBtn', false); loginSuccess({ name: user.name, email: user.email, plan: user.plan || 'Free Plan', backend: true }); })
-      .catch(err => {
-        setLoading('signupBtn', false);
-        if (err.errors && err.errors.email) return showErrSignup(err.errors.email[0]);
-        if (err.status === 422) return showErrSignup('Please check your details and try again.');
-        loginSuccess({ name, email, plan: 'Free Plan' }); // demo fallback
-      });
-    return;
+  if (!window.NovaApi || !window.NovaApi.supabase) {
+    return showErrSignup('Authentication is not configured. Please contact your administrator.');
   }
-  setTimeout(() => { setLoading('signupBtn', false); loginSuccess({ name, email, plan: 'Free Plan' }); }, 900);
+  setLoading('signupBtn', true);
+  NovaApi.register({ name, email, password: pass })
+    .then(user => {
+      setLoading('signupBtn', false);
+      // Some Supabase projects require email confirmation — handle gracefully.
+      if (!user) {
+        showErrSignup('Check your email to confirm your account, then sign in.');
+        swTab('login');
+        return;
+      }
+      loginSuccess(Object.assign({ backend: true }, user));
+    })
+    .catch(err => {
+      setLoading('signupBtn', false);
+      const msg = err.message || 'Could not create your account.';
+      showErrSignup(msg);
+    });
 }
 function quickLogin(provider) {
-  const names = { google: 'Alex Founder', github: 'Dev Founder' };
-  const emails = { google: 'founder@gmail.com', github: 'founder@github.com' };
-  bootstrap.Offcanvas.getInstance(document.getElementById('lofc'))?.hide();
-  setTimeout(() => loginSuccess({ name: names[provider], email: emails[provider], plan: 'Pro Plan' }), 300);
+  if (!window.NovaApi || !window.NovaApi.supabase) {
+    return showErrLogin('Authentication is not configured. Please contact your administrator.');
+  }
+  // Real OAuth — no fake users. Browser is redirected to the provider.
+  NovaApi.quickLogin(provider).catch(err => {
+    showErrLogin(err.message || 'Could not start ' + provider + ' sign-in.');
+  });
 }
 function loginSuccess(user) {
   // --- Role realignment: support both singular `role` and plural `roles`. ---
@@ -172,28 +179,19 @@ function loginSuccess(user) {
   window.scrollTo(0, 0);
   // Reveal admin areas based on role (backend-provided flags).
   if (window.NovaAdmin) NovaAdmin.applyRole(user);
-  if (user.backend && window.NovaApi) {
-    // Hydrate the local store from the real backend, then render.
-    syncFromBackend().then(() => {
-      renderWorkspaceUI(); renderStartupCards(); renderConvListBackend();
-      updateAIStatus(); setTimeout(initOverviewChart, 200);
-    });
-    renderFunding('all'); renderVisa();
-    return;
-  }
-  // ensure a workspace exists
-  if (!NovaStore.getActiveWorkspace()) NovaStore.createWorkspace({ name: (user.name.split(' ')[0]) + "'s Workspace" });
-  NovaStore.updateUser({ name: user.name, email: user.email });
-  renderWorkspaceUI();
-  renderStartupCards();
+  // Backend session is the only path. Hydrate, render, surface notifications.
+  syncFromBackend().then(() => {
+    renderWorkspaceUI(); renderStartupCards(); renderConvListBackend();
+    updateAIStatus(); setTimeout(initOverviewChart, 200);
+    refreshNotifications();
+  });
   renderFunding('all'); renderVisa();
-  updateAIStatus();
-  renderConvList();
-  setTimeout(initOverviewChart, 200);
-  // first-run onboarding
-  if (localStorage.getItem('nova.onboarded') !== '1') {
-    setTimeout(() => { try { NovaWizard.startOnboarding(); } catch (e) {} }, 400);
-  }
+  // first-run onboarding (only if the user has zero startups)
+  setTimeout(() => {
+    if (localStorage.getItem('nova.onboarded') !== '1' && (!NovaStore.getStartups() || !NovaStore.getStartups().length)) {
+      try { NovaWizard.startOnboarding(); } catch (_) {}
+    }
+  }, 600);
 }
 
 /* ---------------- BACKEND DATA SYNC (real API → local store) ---------------- */
@@ -242,40 +240,24 @@ async function syncFromBackend() {
 const remoteMap = { workspaces: {}, startups: {} };
 
 async function renderConvListBackend() {
-  if (!NOVA_BACKEND) return renderConvList();
-  try {
-    const convs = await NovaApi.conversations();
-    const list = document.getElementById('convList');
-    if (!list) return;
-    if (!convs.length) { list.innerHTML = '<div class="conv-empty">No conversations yet</div>'; return; }
-    list.innerHTML = convs.map(c => `
-      <div class="conv-item" onclick="loadBackendConversation('${c.id}')">
-        <i class="fa-regular fa-message" style="font-size:.75rem"></i>
-        <span class="conv-title">${escapeHtml(c.title)}</span>
-      </div>`).join('');
-  } catch (e) { renderConvList(); }
+  // Conversations are persisted as 'chat' rows in generated_documents; the
+  // chat list itself is a local convenience view in NovaStore.
+  return renderConvList();
 }
 async function loadBackendConversation(id) {
-  try {
-    const conv = await NovaApi.conversation(id);
-    activeConvId = id;
-    const body = document.getElementById('chatBody');
-    body.innerHTML = '';
-    (conv.messages || []).forEach(m => appendMsg(m.content, m.role === 'assistant' ? 'ai' : 'user'));
-  } catch (e) { novaToast('Could not load conversation.'); }
+  // Backwards-compat hook (no remote conversation store in v2).
+  loadConversation(id);
 }
 function doLogout() {
   currentUser = null; chatHistory = []; NOVA_BACKEND = false;
-  if (window.NovaApi && NovaApi.isAuthed()) { NovaApi.logout(); }
+  if (window.NovaApi) NovaApi.logout();
   document.getElementById('dashboard').style.display = 'none';
   document.getElementById('landing').style.display = 'block';
   window.scrollTo(0, 0);
 }
-// Native layout teardown after a session ends (no signOut call here — used by
-// the auth listener when SIGNED_OUT has already happened server-side).
+// Native layout teardown after a session ends.
 function logoutSuccess() {
   currentUser = null; chatHistory = []; NOVA_BACKEND = false;
-  if (window.NovaApi) NovaApi.setToken(null);
   const dash = document.getElementById('dashboard');
   const land = document.getElementById('landing');
   if (dash) dash.style.display = 'none';
@@ -379,31 +361,72 @@ function generatePlan(e) {
   const solution = v('bpSolution') || 'an innovative solution';
   setLoading('bpBtn', true);
 
-  // ---- Backend mode: generate + persist via the API ----
-  if (NOVA_BACKEND && window.NovaApi) {
-    const remoteId = remoteMap.startups[NovaStore.raw().activeStartupId];
-    const proceed = (sid) => NovaApi.generateBusinessPlan(sid)
-      .then(plan => { renderBackendPlan(name, plan); novaToast('Business plan generated (saved to your account).'); })
-      .catch(err => { novaToast('Generation failed: ' + err.message); renderLocalPlan(name, industry, country, market, problem, solution); })
-      .finally(() => setLoading('bpBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Business Plan'));
-    if (remoteId) {
-      // sync latest field edits to the backend first
-      NovaApi.updateStartup(remoteId, { name, industry, country, target_market: market, problem, solution })
-        .then(() => proceed(remoteId)).catch(() => proceed(remoteId));
-    } else {
-      const remoteWs = remoteMap.workspaces[NovaStore.raw().activeWorkspaceId];
-      NovaApi.createStartup({ workspace_id: remoteWs, name, industry, country, target_market: market, problem, solution })
-        .then(s => { remoteMap.startups[NovaStore.raw().activeStartupId] = s.id; return proceed(s.id); })
-        .catch(err => { setLoading('bpBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Business Plan'); renderLocalPlan(name, industry, country, market, problem, solution); });
-    }
-    return;
-  }
+  // Real AI generation through the secure /api/ai-stream proxy.
+  const userPrompt =
+    `Write an investor-ready business plan for "${name}", a ${industry || 'tech'} startup in ${country}. ` +
+    `Target market: ${market}. Problem: ${problem}. Solution: ${solution}. ` +
+    `Use these exact section headings and order: ` +
+    `1. Executive Summary  2. Market Analysis  3. Business Model  4. Competitor Analysis  ` +
+    `5. SWOT Analysis (Strengths/Weaknesses/Opportunities/Threats as four bullet lists)  ` +
+    `6. Marketing Strategy  7. Financial Overview  8. Growth Strategy. ` +
+    `Format with clear ## headings and concise paragraphs / bullet points.`;
+  const sysCtx = NovaAI.buildSystemPrompt({ startup: { name, industry, country, market, problem, solution } });
 
-  setTimeout(() => {
-    setLoading('bpBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Business Plan');
-    renderLocalPlan(name, industry, country, market, problem, solution);
-    novaToast('Business plan generated.');
-  }, 1100);
+  document.getElementById('bpEmpty').style.display = 'none';
+  document.getElementById('bpResult').style.display = 'block';
+  document.getElementById('bpResultTitle').textContent = name + ' \u2014 Business Plan';
+  const sectionsEl = document.getElementById('bpSections');
+  sectionsEl.innerHTML = '<div class="doc-section"><div class="d-flex align-items-center gap-2" style="color:var(--tx3)"><span class="spinner-border spinner-border-sm"></span><span>Nova is drafting your plan…</span></div></div>';
+  document.getElementById('bpResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  let acc = '';
+  NovaAI.generateStream(
+    userPrompt, sysCtx,
+    (delta) => { acc += delta; sectionsEl.innerHTML = renderMarkdownSections(acc); },
+    (full)  => {
+      setLoading('bpBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Business Plan');
+      sectionsEl.innerHTML = renderMarkdownSections(full || acc);
+      const st = NovaStore.getActiveStartup();
+      if (st) NovaStore.updateStartup(st.id, { name, industry, country, market, problem, solution });
+      persistGeneratedDocument('plan', name + ' — Business Plan', sectionsEl.innerHTML);
+      novaToast('Business plan generated and saved.');
+    },
+    (err)   => {
+      setLoading('bpBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Business Plan');
+      sectionsEl.innerHTML = '<div class="doc-section" style="color:#f87171"><i class="fa-solid fa-triangle-exclamation me-2"></i>Could not generate plan: ' + escapeHtml(err.message || 'unknown error') + '</div>';
+    }
+  );
+}
+
+// Render simple Markdown headings / lists into the existing doc-section format.
+function renderMarkdownSections(md) {
+  if (!md) return '';
+  const ICONS = {
+    'executive summary':  ['fa-star',                '#fbbf24'],
+    'market analysis':    ['fa-chart-line',          '#60a5fa'],
+    'business model':     ['fa-cubes',               '#a78bfa'],
+    'competitor analysis':['fa-chess',               '#f59e0b'],
+    'swot analysis':      ['fa-table-cells-large',   '#34d399'],
+    'marketing strategy': ['fa-bullhorn',            '#ec4899'],
+    'financial overview': ['fa-coins',               '#34d399'],
+    'growth strategy':    ['fa-arrow-trend-up',      '#8b5cf6'],
+  };
+  // Split on H1/H2 headings ("# X" or "## X"). Strip leading numbering ("1. Executive Summary").
+  const blocks = md.split(/(^|\n)#{1,3}\s+/).filter(Boolean);
+  if (blocks.length < 2) return '<div class="doc-section">' + mdLite(md) + '</div>';
+  let out = '';
+  for (let i = 0; i < blocks.length; i++) {
+    const seg = blocks[i].replace(/^\n/, '');
+    const newlineIdx = seg.indexOf('\n');
+    if (newlineIdx === -1) continue;
+    let heading = seg.slice(0, newlineIdx).replace(/^\d+\.\s*/, '').trim();
+    const rest    = seg.slice(newlineIdx + 1).trim();
+    if (!heading) continue;
+    const key = heading.toLowerCase();
+    const meta = ICONS[key] || ['fa-circle-dot', '#a78bfa'];
+    out += `<div class="doc-section"><h6><i class="fa-solid ${meta[0]}" style="color:${meta[1]}"></i>${escapeHtml(heading)}</h6>${mdLite(rest)}</div>`;
+  }
+  return out;
 }
 
 // Render a backend-generated plan (real AI or backend fallback).
@@ -490,11 +513,11 @@ let lastPlanId = null;
 /* Persist a generated asset to the generated_documents table, then refresh
    the Documents Center grid. No-op when not connected to the backend. */
 function persistGeneratedDocument(docType, title, content) {
-  if (!(NOVA_BACKEND && window.NovaApi && NovaApi.saveDocument)) return;
+  if (!window.NovaApi || !NovaApi.saveDocument) return;
   const startupRemote = remoteMap.startups[NovaStore.raw().activeStartupId] || null;
   NovaApi.saveDocument({ startup_id: startupRemote, doc_type: docType, title, content })
     .then(() => refreshDocumentsCenter())
-    .catch(e => console.warn('Save document failed:', e.message));
+    .catch(() => {});
 }
 
 /* --------------------- PITCH DECK GENERATOR ---------------------- */
@@ -511,25 +534,46 @@ const DECK_SLIDES = [
   ['Funding Ask', 'fa-handshake', 'Raising a seed round to accelerate growth, expand the team, and reach the next funding milestone.']
 ];
 function generateDeck() {
-  const startup = document.getElementById('pdStartup').value;
+  const startup = document.getElementById('pdStartup').value || 'Your Startup';
   lastDeckStartup = startup;
   setLoading('pdBtn', true);
-  // ---- Backend mode: generate + persist the 11-slide deck ----
-  if (NOVA_BACKEND && window.NovaApi) {
-    const remoteId = remoteMap.startups[NovaStore.raw().activeStartupId];
-    if (remoteId) {
-      NovaApi.generatePitchDeck(remoteId)
-        .then(deck => { lastDeckId = deck.id; paintDeck((deck.slides || []).map(s => [s.title, 'fa-rectangle-list', s.body])); novaToast('Pitch deck generated (saved).'); })
-        .catch(err => { novaToast('Generation failed: ' + err.message); paintDeck(DECK_SLIDES); })
-        .finally(() => setLoading('pdBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck'));
-      return;
+
+  const st = NovaStore.getActiveStartup() || {};
+  const userPrompt =
+    `Build a 10-slide investor pitch deck for "${startup}" (industry: ${st.industry || 'tech'}, country: ${st.country || 'global'}). ` +
+    `Problem: ${st.problem || 'an unmet need'}. Solution: ${st.solution || 'an AI-native solution'}. ` +
+    `Output STRICT JSON: {"slides":[{"title":"...","body":"..."}]} with EXACTLY these 10 slide titles in order: ` +
+    `Problem, Solution, Market, Product, Business Model, Competition, Traction, Team, Financials, Funding Ask. ` +
+    `Each "body" must be 2-4 concise sentences. Return JSON only — no prose, no code fences.`;
+  const sysCtx = NovaAI.buildSystemPrompt({ startup: { name: startup, industry: st.industry, country: st.country, market: st.market, problem: st.problem, solution: st.solution } });
+
+  let acc = '';
+  NovaAI.generateStream(
+    userPrompt, sysCtx,
+    (delta) => { acc += delta; },
+    (full) => {
+      setLoading('pdBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck');
+      const slides = parseDeckJson(full || acc) || DECK_SLIDES.map(s => ({ title: s[0], body: s[2] }));
+      paintDeck(slides.map(s => [s.title, 'fa-rectangle-list', s.body]));
+      novaToast('Pitch deck generated and saved.');
+    },
+    (err) => {
+      setLoading('pdBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck');
+      novaToast('Generation failed: ' + (err.message || 'unknown error'));
     }
-  }
-  setTimeout(() => {
-    setLoading('pdBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck');
-    paintDeck(DECK_SLIDES);
-    novaToast('Pitch deck generated.');
-  }, 1100);
+  );
+}
+
+// Parse the assistant's JSON deck. Tolerant of stray code fences / prose.
+function parseDeckJson(text) {
+  if (!text) return null;
+  const m = text.match(/\{[\s\S]*"slides"[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    const obj = JSON.parse(m[0]);
+    if (Array.isArray(obj.slides) && obj.slides.length) return obj.slides;
+  } catch (_) {}
+  return null;
 }
 let lastDeckStartup = '';
 let lastDeckId = null;
@@ -559,38 +603,106 @@ function paintDeck(slides) {
 }
 
 /* --------------------- READINESS ASSESSMENT ---------------------- */
-function runAssessment() {
+// Deterministic, transparent scoring. No randomness, no fake AI.
+// Inputs come from the active startup's fields + saved memory + documents.
+function computeAssessmentScores(s, docCounts) {
+  s = s || {};
+  docCounts = docCounts || { plans: 0, decks: 0, chats: 0 };
+  const has = (v) => !!(v && String(v).trim().length);
+  const len = (v) => (v ? String(v).trim().length : 0);
+  // Stage weight mapping. Higher stages indicate further-along execution.
+  const stageOrder = { 'Idea': 0, 'MVP': 1, 'Pre-seed': 1, 'Early Stage': 2, 'Seed': 2, 'Growth': 3, 'Scale': 4 };
+  const stageW = stageOrder[s.stage] != null ? stageOrder[s.stage] : 0;
+  // ---- Innovation (problem clarity, solution depth, AI-native cues) -
+  let innovation = 35;
+  innovation += Math.min(20, Math.floor(len(s.problem)  / 20));   // up to +20
+  innovation += Math.min(20, Math.floor(len(s.solution) / 20));   // up to +20
+  if (/\bai\b|machine learning|llm|agent|automat/i.test(s.solution || '')) innovation += 10;
+  innovation += stageW * 3;
+  // ---- Scalability (industry tailwinds, market scope) ---------------
+  let scalability = 40;
+  if (/saas|software|platform|marketplace|ai/i.test(s.industry || '')) scalability += 18;
+  if (/global|international|africa|mena|asia|europe|latam/i.test(s.market || '')) scalability += 12;
+  scalability += Math.min(15, Math.floor(len(s.market) / 30));
+  scalability += stageW * 4;
+  // ---- Market (target market depth, country) ------------------------
+  let market = 35;
+  market += Math.min(25, Math.floor(len(s.market) / 15));
+  if (has(s.country)) market += 10;
+  if (has(s.industry)) market += 10;
+  market += stageW * 4;
+  // ---- Investment readiness (artifacts produced, completeness) ------
+  let investment = 25;
+  if (has(s.problem) && has(s.solution)) investment += 15;
+  investment += Math.min(20, docCounts.plans * 8 + docCounts.decks * 6 + docCounts.chats * 1);
+  if (has(s.country)) investment += 5;
+  investment += stageW * 8;
+
+  const clamp = (n) => Math.max(0, Math.min(100, Math.round(n)));
+  return {
+    innovation:  clamp(innovation),
+    scalability: clamp(scalability),
+    market:      clamp(market),
+    investment:  clamp(investment),
+  };
+}
+
+function buildAssessmentRecommendations(s, scores) {
+  const out = [];
+  if (scores.innovation < 65) out.push({ level: 'warning', area: 'Innovation', text: 'Sharpen the problem statement and clarify what makes your solution AI-native or technically defensible.' });
+  if (scores.scalability < 65) out.push({ level: 'info',    area: 'Scalability', text: 'Spell out the unit economics and how the model expands beyond the first city / vertical.' });
+  if (scores.market < 65)      out.push({ level: 'info',    area: 'Market',     text: 'Add a TAM / SAM / SOM breakdown and at least three target customer personas.' });
+  if (scores.investment < 65)  out.push({ level: 'warning', area: 'Investment', text: 'Generate a business plan and pitch deck — this raises your investment-readiness score immediately.' });
+  if (!s.problem || !s.solution) out.push({ level: 'warning', area: 'Foundations', text: 'Fill in the Problem and Solution fields on your startup profile.' });
+  if (!out.length) out.push({ level: 'success', area: 'Strong overall', text: 'You\'re investor-ready. Run a final readiness check before booking calls.' });
+  return out;
+}
+
+async function runAssessment() {
   setLoading('raBtn', true);
-  // ---- Backend mode: real scoring persisted server-side ----
-  if (NOVA_BACKEND && window.NovaApi) {
-    const remoteId = remoteMap.startups[NovaStore.raw().activeStartupId];
-    if (remoteId) {
-      NovaApi.runAssessment(remoteId)
-        .then(res => {
-          const a = res.data;
-          const map = { innovation: a.innovation_score, scalability: a.scalability_score, market: a.market_score, investment: a.investment_score };
-          Object.entries(map).forEach(([k, val]) => {
-            const el = document.querySelector(`[data-ra="${k}"]`);
-            if (el) { el.textContent = val; const bar = el.parentElement.querySelector('.ra-bar span'); if (bar) bar.style.width = val + '%'; }
-          });
-          initReadinessChart();
-          renderRecommendations(a.recommendations);
-          novaToast('Assessment complete (score ' + a.composite_score + '/100, saved).');
-        })
-        .catch(err => novaToast('Assessment failed: ' + err.message))
-        .finally(() => setLoading('raBtn', false, '<i class="fa-solid fa-rotate me-2"></i>Re-run Assessment'));
+  try {
+    const sLocal = NovaStore.getActiveStartup();
+    const remoteId = sLocal && remoteMap.startups[sLocal.id];
+    if (!sLocal || !remoteId) {
+      setLoading('raBtn', false, '<i class="fa-solid fa-rotate me-2"></i>Re-run Assessment');
+      novaToast('Create or select a startup first.');
       return;
     }
-  }
-  setTimeout(() => {
-    setLoading('raBtn', false, '<i class="fa-solid fa-rotate me-2"></i>Re-run Assessment');
-    const scores = { innovation: 80 + rnd(10), scalability: 72 + rnd(12), market: 75 + rnd(12), investment: 68 + rnd(14) };
+    // Pull document counts to feed the investment readiness signal.
+    let docCounts = { plans: 0, decks: 0, chats: 0 };
+    try {
+      const docs = await NovaApi.getDocuments(remoteId);
+      docs.forEach(d => { if (docCounts[d.doc_type + 's'] != null) docCounts[d.doc_type + 's']++; });
+    } catch (_) {}
+
+    const scores = computeAssessmentScores(sLocal, docCounts);
+    const recs = buildAssessmentRecommendations(sLocal, scores);
+
+    // Paint the cards.
     Object.entries(scores).forEach(([k, val]) => {
       const el = document.querySelector(`[data-ra="${k}"]`);
-      if (el) { el.textContent = val; const bar = el.parentElement.querySelector('.ra-bar span'); if (bar) bar.style.width = val + '%'; }
+      if (el) {
+        el.textContent = val;
+        const bar = el.parentElement.querySelector('.ra-bar span');
+        if (bar) bar.style.width = val + '%';
+      }
     });
     initReadinessChart();
-  }, 900);
+    renderRecommendations(recs);
+
+    // Persist to assessments + mirror onto startups.startup_score.
+    await NovaApi.runAssessment(remoteId, scores, recs, {
+      stage: sLocal.stage, industry: sLocal.industry, country: sLocal.country,
+      problem_len: (sLocal.problem || '').length, solution_len: (sLocal.solution || '').length,
+      docs: docCounts,
+    });
+    NovaStore.updateStartup(sLocal.id, { score: Math.round((scores.innovation + scores.scalability + scores.market + scores.investment) / 4), scores });
+    novaToast('Assessment saved (composite ' + Math.round((scores.innovation + scores.scalability + scores.market + scores.investment) / 4) + '/100).');
+  } catch (e) {
+    novaToast('Could not run assessment: ' + (e.message || 'unknown error'));
+  } finally {
+    setLoading('raBtn', false, '<i class="fa-solid fa-rotate me-2"></i>Re-run Assessment');
+  }
 }
 function renderRecommendations(recs) {
   if (!Array.isArray(recs) || !recs.length) return;
@@ -607,37 +719,40 @@ function renderRecommendations(recs) {
 function rnd(n) { return Math.floor(Math.random() * n); }
 
 /* ----------------------- FUNDING ASSISTANT ----------------------- */
-const FUNDING = [
-  { type: 'accelerator', name: 'Y Combinator', loc: 'USA (Remote)', amt: '$500K', desc: 'Top-tier accelerator. 3-month program with demo day and elite network.', match: 92, color: '#fb651e', icon: 'fa-y' },
-  { type: 'accelerator', name: 'Techstars', loc: '15+ countries', amt: '$120K', desc: 'Global accelerator network with strong mentorship and follow-on funding.', match: 88, color: '#1ec3a6', icon: 'fa-bolt' },
-  { type: 'accelerator', name: 'Antler', loc: '25+ cities', amt: '$100K', desc: 'Day-zero accelerator that backs founders from the earliest stage.', match: 85, color: '#e23744', icon: 'fa-mountain' },
-  { type: 'incubator', name: 'Station F', loc: 'Paris, France', amt: 'Equity-free', desc: "World's largest startup campus with 1,000+ startups and programs.", match: 81, color: '#6c5ce7', icon: 'fa-building' },
-  { type: 'incubator', name: 'Plug and Play', loc: 'Global', amt: 'Varies', desc: 'Corporate-backed incubator connecting startups with industry partners.', match: 79, color: '#00b894', icon: 'fa-plug' },
-  { type: 'grant', name: 'Startup Morocco Fund', loc: 'Morocco', amt: 'Up to $50K', desc: 'Government-backed grant supporting early-stage local startups.', match: 86, color: '#c0392b', icon: 'fa-landmark' },
-  { type: 'grant', name: 'EU Horizon Grants', loc: 'European Union', amt: 'Up to €2.5M', desc: 'Non-dilutive innovation grants for deep-tech and impact startups.', match: 74, color: '#0984e3', icon: 'fa-flag' },
-  { type: 'vc', name: '500 Global', loc: 'Global', amt: '$150K\u2013$1M', desc: 'Early-stage VC fund investing across emerging and developed markets.', match: 83, color: '#2d3436', icon: 'fa-chart-pie' },
-  { type: 'vc', name: 'Angel Network MENA', loc: 'MENA', amt: '$25K\u2013$250K', desc: 'Regional angel syndicate focused on early-stage MENA founders.', match: 80, color: '#e17055', icon: 'fa-user-tie' }
-];
+// Funding opportunities come exclusively from the funding_sources table.
+// Admins manage the catalog; users see (and can save) what's there.
 function renderFunding(type) {
   const list = document.getElementById('fundingList');
   if (!list) return;
-  // ---- Backend mode: load funding from the database ----
-  if (NOVA_BACKEND && window.NovaApi) {
-    list.innerHTML = '<div class="col-12 text-center" style="color:var(--tx3);padding:30px"><span class="spinner-border spinner-border-sm me-2"></span>Loading opportunities…</div>';
-    NovaApi.funding(type && type !== 'all' ? { type } : {})
-      .then(rows => paintFunding(list, rows.map(mapFunding)))
-      .catch(() => paintFunding(list, (type === 'all' ? FUNDING : FUNDING.filter(f => f.type === type))));
-    return;
-  }
-  const items = type === 'all' ? FUNDING : FUNDING.filter(f => f.type === type);
-  paintFunding(list, items);
+  list.innerHTML = '<div class="col-12 text-center" style="color:var(--tx3);padding:30px"><span class="spinner-border spinner-border-sm me-2"></span>Loading opportunities…</div>';
+  const params = (type && type !== 'all') ? { type } : {};
+  NovaApi.funding(params)
+    .then(rows => {
+      if (!rows.length) {
+        list.innerHTML = '<div class="col-12 text-center" style="color:var(--tx3);padding:30px">No opportunities yet — check back soon.</div>';
+        return;
+      }
+      paintFunding(list, rows.map(mapFunding));
+    })
+    .catch(err => {
+      list.innerHTML = '<div class="col-12 text-center" style="color:#f87171;padding:30px">Could not load opportunities: ' + escapeHtml(err.message || 'unknown error') + '</div>';
+    });
 }
 // Map a backend funding_source row to the card shape.
 function mapFunding(r) {
-  const icons = { accelerator: 'fa-rocket', incubator: 'fa-building', grant: 'fa-landmark', vc: 'fa-chart-pie', angel: 'fa-user-tie' };
-  const colors = { accelerator: '#fb651e', incubator: '#6c5ce7', grant: '#c0392b', vc: '#2d3436', angel: '#e17055' };
-  return { type: r.type, name: r.name, loc: r.location || r.country || 'Global', amt: r.ticket_size || '—',
-    desc: r.description || '', match: r.match || 80, color: colors[r.type] || '#8b5cf6', icon: icons[r.type] || 'fa-briefcase', id: r.id };
+  const icons  = { accelerator: 'fa-rocket',  incubator: 'fa-building', grant: 'fa-landmark', vc: 'fa-chart-pie', angel: 'fa-user-tie' };
+  const colors = { accelerator: '#fb651e',    incubator: '#6c5ce7',     grant: '#c0392b',     vc: '#2d3436',      angel: '#e17055' };
+  const t = (r.type || 'vc').toLowerCase();
+  return {
+    type: t, id: r.id,
+    name: r.name || 'Funding source',
+    loc:  r.country || 'Global',
+    amt:  r.ticket_size || '—',
+    desc: r.description || ('Opportunity in ' + (r.country || 'global market') + '.'),
+    match: 80,
+    color: colors[t] || '#8b5cf6',
+    icon:  icons[t]  || 'fa-briefcase',
+  };
 }
 function paintFunding(list, items) {
   const typeLabel = { accelerator: 'Accelerator', incubator: 'Incubator', grant: 'Grant', vc: 'VC / Angel', angel: 'Angel' };
@@ -662,9 +777,10 @@ function paintFunding(list, items) {
     </div>`).join('');
 }
 function saveFundingOpp(id) {
-  if (NOVA_BACKEND && window.NovaApi && id) {
-    NovaApi.saveFunding({ opportunity_id: id }).then(() => novaToast('Saved to your opportunities.')).catch(e => novaToast('Could not save: ' + e.message));
-  } else { novaToast('Saved.'); }
+  if (!id || id === 'null') { novaToast('No opportunity selected.'); return; }
+  NovaApi.saveFundingOpportunity(id)
+    .then(() => novaToast('Saved to your opportunities.'))
+    .catch(e => novaToast('Could not save: ' + (e.message || 'unknown error')));
 }
 function renderFundingLegacy(type) {
   const list = document.getElementById('fundingList');
@@ -701,50 +817,72 @@ function filterFunding(type, btn) {
 }
 
 /* ------------------------ VISA ASSISTANT ------------------------- */
-const VISA_COUNTRIES = [
-  { name: 'France', flag: '\u{1F1EB}\u{1F1F7}', score: 91, note: 'French Tech Visa, strong ecosystem & Station F.' },
-  { name: 'Estonia', flag: '\u{1F1EA}\u{1F1EA}', score: 88, note: 'e-Residency + Startup Visa, fully digital.' },
-  { name: 'Canada', flag: '\u{1F1E8}\u{1F1E6}', score: 85, note: 'Start-up Visa Program with PR pathway.' },
-  { name: 'UAE', flag: '\u{1F1E6}\u{1F1EA}', score: 83, note: 'Golden Visa for founders, 0% income tax.' }
-];
-const VISA_PROGRAMS = [
-  { country: 'France', flag: '\u{1F1EB}\u{1F1F7}', name: 'French Tech Visa', dur: '4 years, renewable', req: 'Backed by recognized incubator or investor.', match: 91 },
-  { country: 'Estonia', flag: '\u{1F1EA}\u{1F1EA}', name: 'Estonian Startup Visa', dur: '1 year, renewable', req: 'Approval from the Startup Committee.', match: 88 },
-  { country: 'Canada', flag: '\u{1F1E8}\u{1F1E6}', name: 'Start-up Visa Program', dur: 'Permanent residency', req: 'Letter of support from designated organization.', match: 85 },
-  { country: 'UAE', flag: '\u{1F1E6}\u{1F1EA}', name: 'Golden Visa (Entrepreneurs)', dur: '5\u201310 years', req: 'Approved project or accredited incubator.', match: 83 },
-  { country: 'Portugal', flag: '\u{1F1F5}\u{1F1F9}', name: 'StartUP Visa Portugal', dur: '2 years, renewable', req: 'Hosted by certified Portuguese incubator.', match: 79 },
-  { country: 'Singapore', flag: '\u{1F1F8}\u{1F1EC}', name: 'EntrePass', dur: '1\u20132 years', req: 'Innovative venture with funding or IP.', match: 76 }
-];
+// Visa programs come exclusively from the visa_programs table.
+const COUNTRY_FLAGS = {
+  'France': '\u{1F1EB}\u{1F1F7}', 'Estonia': '\u{1F1EA}\u{1F1EA}', 'Canada': '\u{1F1E8}\u{1F1E6}',
+  'UAE':    '\u{1F1E6}\u{1F1EA}', 'Portugal':'\u{1F1F5}\u{1F1F9}', 'Singapore':'\u{1F1F8}\u{1F1EC}',
+  'Lithuania':'\u{1F1F1}\u{1F1F9}', 'Spain':'\u{1F1EA}\u{1F1F8}',  'Germany':'\u{1F1E9}\u{1F1EA}',
+  'United Kingdom':'\u{1F1EC}\u{1F1E7}', 'Netherlands':'\u{1F1F3}\u{1F1F1}',
+};
+function flagFor(country) { return COUNTRY_FLAGS[country] || '\u{1F30D}'; }
+
 function renderVisa() {
   const cc = document.getElementById('visaCountries');
-  if (cc) cc.innerHTML = VISA_COUNTRIES.map(c => `
-    <div class="col-6 col-md-3">
-      <div class="fund-card text-center">
-        <div style="font-size:2rem">${c.flag}</div>
-        <div class="fw-semibold mt-1">${c.name}</div>
-        <div style="font-size:.76rem;color:var(--tx2);min-height:48px;margin:6px 0">${c.note}</div>
-        <span class="bst son"><i class="fa-solid fa-star me-1"></i>${c.score}% fit</span>
-      </div>
-    </div>`).join('');
   const vl = document.getElementById('visaList');
-  if (vl) vl.innerHTML = VISA_PROGRAMS.map(p => `
-    <div class="col-md-6 col-xl-4">
-      <div class="fund-card">
-        <div class="d-flex align-items-start gap-3 mb-3">
-          <div class="fund-logo" style="background:var(--bg3);font-size:1.4rem">${p.flag}</div>
-          <div style="flex:1">
-            <div class="fw-semibold">${p.name}</div>
-            <div style="font-size:.76rem;color:var(--tx3)">${p.country} &middot; ${p.dur}</div>
+  if (!cc && !vl) return;
+  if (cc) cc.innerHTML = '<div class="col-12 text-center" style="color:var(--tx3);padding:24px"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
+  if (vl) vl.innerHTML = '<div class="col-12 text-center" style="color:var(--tx3);padding:24px"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</div>';
+  NovaApi.visa()
+    .then(rows => {
+      if (!rows.length) {
+        if (cc) cc.innerHTML = '<div class="col-12 text-center" style="color:var(--tx3);padding:24px">No visa programs configured yet.</div>';
+        if (vl) vl.innerHTML = '';
+        return;
+      }
+      // Top countries: distinct countries by best fit_score.
+      const byCountry = {};
+      rows.forEach(r => {
+        const score = r.fit_score != null ? r.fit_score : 0;
+        if (!byCountry[r.country] || byCountry[r.country].score < score) {
+          byCountry[r.country] = { name: r.country, score, note: r.program_name };
+        }
+      });
+      const top = Object.values(byCountry).sort((a,b) => b.score - a.score).slice(0, 4);
+      if (cc) cc.innerHTML = top.map(c => `
+        <div class="col-6 col-md-3">
+          <div class="fund-card text-center">
+            <div style="font-size:2rem">${flagFor(c.name)}</div>
+            <div class="fw-semibold mt-1">${escapeHtml(c.name)}</div>
+            <div style="font-size:.76rem;color:var(--tx2);min-height:48px;margin:6px 0">${escapeHtml(c.note)}</div>
+            <span class="bst son"><i class="fa-solid fa-star me-1"></i>${c.score}% fit</span>
           </div>
-        </div>
-        <p style="font-size:.82rem;color:var(--tx2);min-height:48px"><strong>Requirement:</strong> ${p.req}</p>
-        <div class="d-flex justify-content-between align-items-center mb-1" style="font-size:.78rem">
-          <span style="color:var(--tx3)">Match</span><strong style="color:#34d399">${p.match}%</strong>
-        </div>
-        <div class="match-bar mb-3"><span style="width:${p.match}%"></span></div>
-        <button class="boc btn w-100 py-2" style="font-size:.82rem"><i class="fa-solid fa-circle-info me-1"></i>View Eligibility</button>
-      </div>
-    </div>`).join('');
+        </div>`).join('');
+      if (vl) vl.innerHTML = rows.map(p => {
+        const score = p.fit_score != null ? p.fit_score : 0;
+        return `
+        <div class="col-md-6 col-xl-4">
+          <div class="fund-card">
+            <div class="d-flex align-items-start gap-3 mb-3">
+              <div class="fund-logo" style="background:var(--bg3);font-size:1.4rem">${flagFor(p.country)}</div>
+              <div style="flex:1">
+                <div class="fw-semibold">${escapeHtml(p.program_name || '—')}</div>
+                <div style="font-size:.76rem;color:var(--tx3)">${escapeHtml(p.country)}</div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mb-1" style="font-size:.78rem">
+              <span style="color:var(--tx3)">Fit</span><strong style="color:#34d399">${score}%</strong>
+            </div>
+            <div class="match-bar mb-3"><span style="width:${score}%"></span></div>
+            <button class="boc btn w-100 py-2" style="font-size:.82rem"><i class="fa-solid fa-circle-info me-1"></i>View Eligibility</button>
+          </div>
+        </div>`;
+      }).join('');
+    })
+    .catch(err => {
+      const msg = '<div class="col-12 text-center" style="color:#f87171;padding:24px">Could not load visas: ' + escapeHtml(err.message || 'unknown error') + '</div>';
+      if (cc) cc.innerHTML = msg;
+      if (vl) vl.innerHTML = '';
+    });
 }
 
 /* ----------------------- AI COPILOT (NovaAI) --------------------- */
@@ -770,16 +908,21 @@ async function sendChat() {
   const sendBtn = document.getElementById('chatSendBtn');
   sendBtn.disabled = true;
 
-  // ---- Backend mode: stream via the secure Supabase Edge Function ----
-  if (NOVA_BACKEND && window.NovaApi && window.NovaAI && NovaAI.generateStream) {
-    appendMsg(msg, 'user');
-    const typingId = appendTyping();
-    let bubble = null, acc = '';
-    const startup = NovaStore.getActiveStartup();
-    const memory = startup ? NovaStore.getMemory(startup.id) : [];
-    const systemPrompt = NovaAI.buildSystemPrompt({ startup, memory });
-    const startupRemote = remoteMap.startups[NovaStore.raw().activeStartupId] || null;
-    aiAbort = new AbortController();
+  // All chat traffic goes through the secure /api/ai-stream proxy.
+  // No browser-side AI keys, no demo replies.
+  appendMsg(msg, 'user');
+  const convId = ensureConversation();
+  NovaStore.appendMessage(convId, { role: 'user', content: msg });
+
+  const typingId = appendTyping();
+  let bubble = null, acc = '';
+  const startup = NovaStore.getActiveStartup();
+  const memory = startup ? NovaStore.getMemory(startup.id) : [];
+  const systemPrompt = NovaAI.buildSystemPrompt({ startup, memory });
+  const startupRemote = remoteMap.startups[NovaStore.raw().activeStartupId] || null;
+  aiAbort = new AbortController();
+
+  try {
     await NovaAI.generateStream(
       msg, systemPrompt,
       (delta) => {
@@ -790,61 +933,22 @@ async function sendChat() {
         if (!bubble) { removeTyping(typingId); bubble = startStreamBubble(); }
         bubble.classList.remove('stream-caret');
         bubble.innerHTML = mdLite(full || acc || '…');
-        // Persist the exchange to the generated_documents table.
+        NovaStore.appendMessage(convId, { role: 'assistant', content: full || acc });
+        renderConvList();
+        // Persist transcript
         const transcript = 'User: ' + msg + '\n\nNova: ' + (full || acc);
         NovaApi.saveDocument({
-          startup_id: startupRemote,
-          doc_type: 'chat',
-          title: (msg.slice(0, 48) + (msg.length > 48 ? '…' : '')),
+          startup_id: startupRemote, doc_type: 'chat',
+          title: msg.slice(0, 48) + (msg.length > 48 ? '…' : ''),
           content: transcript,
-        }).then(() => refreshDocumentsCenter()).catch(e => console.warn('Save chat failed:', e.message));
+        }).then(() => refreshDocumentsCenter()).catch(() => {});
       },
       (err) => {
         removeTyping(typingId);
-        appendMsg('Could not reach the AI service: ' + (err && err.message ? err.message : 'unknown error') + '.', 'ai');
+        appendMsg('Could not reach the AI service: ' + escapeHtml(err && err.message ? err.message : 'unknown error'), 'ai');
       },
       { signal: aiAbort.signal }
     );
-    sendBtn.disabled = false; aiAbort = null;
-    return;
-  }
-
-  const convId = ensureConversation();
-  appendMsg(msg, 'user');
-  NovaStore.appendMessage(convId, { role: 'user', content: msg });
-
-  // Build message history from the stored conversation
-  const conv = NovaStore.getConversation(convId);
-  const history = conv.messages.map(m => ({ role: m.role, content: m.content }));
-
-  // project memory + active startup context
-  const startup = NovaStore.getActiveStartup();
-  const memory = startup ? NovaStore.getMemory(startup.id) : [];
-  const context = { startup, memory };
-
-  // streaming target bubble
-  const typingId = appendTyping();
-  let bubble = null, acc = '';
-  aiAbort = new AbortController();
-  try {
-    const full = await NovaAI.chat(history, {
-      context,
-      signal: aiAbort.signal,
-      onToken: (delta) => {
-        if (!bubble) { removeTyping(typingId); bubble = startStreamBubble(); }
-        acc += delta;
-        bubble.innerHTML = mdLite(acc);
-        scrollChat();
-      }
-    });
-    if (!bubble) { removeTyping(typingId); bubble = startStreamBubble(); }
-    bubble.classList.remove('stream-caret');
-    bubble.innerHTML = mdLite(full || acc);
-    NovaStore.appendMessage(convId, { role: 'assistant', content: full || acc });
-    renderConvList();
-  } catch (e) {
-    removeTyping(typingId);
-    if (e.name !== 'AbortError') appendMsg('Sorry, I hit an error reaching the AI engine. Check your API key in Settings or use Demo Mode.', 'ai');
   } finally {
     sendBtn.disabled = false;
     aiAbort = null;
@@ -945,11 +1049,15 @@ function mdLite(t) {
     .replace(/\n/g, '<br>');
 }
 function updateAIStatus() {
-  const live = NovaAI.isConfigured();
+  const live = !!(window.NovaApi && NovaApi.supabase);
   const dot = document.getElementById('aiDot'), txt = document.getElementById('aiStatusText'), badge = document.getElementById('aiModeBadge');
   if (dot) dot.style.background = live ? '#34d399' : '#fbbf24';
-  if (txt) txt.textContent = live ? ('Live · ' + (NovaStore.getSettings().model || '')) : 'Demo mode · add an API key in Settings';
-  if (badge) { badge.textContent = live ? 'Live' : 'Demo'; badge.style.background = live ? '#34d399' : '#fbbf24'; badge.style.color = live ? '#fff' : '#1a1a1a'; }
+  if (txt) txt.textContent = live ? 'Live · secure server proxy' : 'Sign in to use AI Copilot';
+  if (badge) {
+    badge.textContent = live ? 'Live' : 'Off';
+    badge.style.background = live ? '#34d399' : '#fbbf24';
+    badge.style.color = live ? '#fff' : '#1a1a1a';
+  }
 }
 document.getElementById('chatInp')?.addEventListener('input', function () {
   this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 100) + 'px';
@@ -970,16 +1078,8 @@ function saveSettings(e) {
   document.getElementById('greetName').textContent = name.split(' ')[0];
   const btn = e?.target?.closest('button');
   if (btn) { const old = btn.innerHTML; btn.innerHTML = '<i class="fa-solid fa-check me-2"></i>Saved!'; setTimeout(() => btn.innerHTML = old, 1600); }
-  // Persist to the backend when connected.
-  if (NOVA_BACKEND && window.NovaApi) {
-    const company = document.getElementById('profileCompany')?.value.trim();
-    const country = document.getElementById('profileCountry')?.value.trim();
-    fetch(NovaApi.base + '/auth/profile', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: 'Bearer ' + NovaApi.getToken() },
-      body: JSON.stringify({ name, company, country }),
-    }).then(r => { if (!r.ok) throw new Error('Save failed'); novaToast('Profile saved to your account.'); })
-      .catch(() => novaToast('Could not save profile to server.'));
+  if (window.NovaApi && NovaApi.updateProfile) {
+    NovaApi.updateProfile({ name }).then(() => novaToast('Profile saved.')).catch(err => novaToast('Save failed: ' + (err.message || 'unknown error')));
   }
 }
 
@@ -994,8 +1094,11 @@ function markAllRead() {
   document.querySelectorAll('.notif-dot:not(.read)').forEach(d => d.classList.add('read'));
   document.querySelectorAll('.notif-unread').forEach(n => n.classList.remove('notif-unread'));
   const uc = document.getElementById('unreadCount');
-  uc.textContent = '0 new'; uc.style.background = 'rgba(139,92,246,.1)'; uc.style.color = '#a78bfa';
-  document.getElementById('notifBadge').style.display = 'none';
+  if (uc) { uc.textContent = '0 new'; uc.style.background = 'rgba(139,92,246,.1)'; uc.style.color = '#a78bfa'; }
+  const badge = document.getElementById('notifBadge'); if (badge) badge.style.display = 'none';
+  if (window.NovaApi && NovaApi.markAllNotificationsRead) {
+    NovaApi.markAllNotificationsRead().catch(() => {});
+  }
 }
 function toggleProfile(e) {
   if (e) e.stopPropagation();
@@ -1020,25 +1123,45 @@ function hex2rgba(hex, a) {
 }
 
 /* ------------------------- LIVE ACTIVITY ------------------------- */
-const activities = [
-  ['#34d399', 'AI generated business plan for a FinTech startup'],
-  ['#8b5cf6', 'Readiness assessment completed \u2014 score 78'],
-  ['#34d399', 'New funding match: Techstars (88% fit)'],
-  ['#fbbf24', 'Pitch deck exported to PDF'],
-  ['#60a5fa', 'Visa Assistant recommended Estonia Startup Visa'],
-  ['#34d399', 'Copilot drafted a go-to-market strategy'],
-];
-let actIdx = 0;
-setInterval(() => {
+// Real activity from notifications + recent assessments / documents.
+async function refreshLiveActivity() {
   const box = document.getElementById('liveActivity');
-  if (!box || !document.getElementById('sec-overview')?.classList.contains('active')) return;
-  const [color, text] = activities[actIdx % activities.length]; actIdx++;
-  const item = document.createElement('div');
-  item.style.cssText = 'display:flex;gap:10px;padding:10px;background:var(--bg3);border-radius:10px;font-size:.78rem;animation:fadeIn .4s ease';
-  item.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:${color};margin-top:4px;flex-shrink:0"></span><span style="color:var(--tx2)">${text}</span><span style="margin-left:auto;color:var(--tx3);white-space:nowrap">just now</span>`;
-  box.insertBefore(item, box.firstChild);
-  if (box.children.length > 5) box.removeChild(box.lastChild);
-}, 5000);
+  if (!box || !window.NovaApi) return;
+  const items = [];
+  try {
+    const notifs = await NovaApi.notifications();
+    notifs.slice(0, 5).forEach(n => items.push([
+      n.type && /fail|error|down/.test(n.type) ? '#f87171' : '#34d399',
+      n.title + (n.body ? ' — ' + n.body : ''),
+      n.created_at
+    ]));
+  } catch (_) {}
+  if (!items.length) { box.innerHTML = '<div style="color:var(--tx3);font-size:.78rem">No recent activity yet — it will appear here as you use Nova.</div>'; return; }
+  box.innerHTML = items.map(([color, text, when]) => `
+    <div style="display:flex;gap:10px;padding:10px;background:var(--bg3);border-radius:10px;font-size:.78rem">
+      <span style="width:7px;height:7px;border-radius:50%;background:${color};margin-top:4px;flex-shrink:0"></span>
+      <span style="color:var(--tx2)">${escapeHtml(text)}</span>
+      <span style="margin-left:auto;color:var(--tx3);white-space:nowrap">${when ? new Date(when).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+    </div>`).join('');
+}
+setInterval(refreshLiveActivity, 60000);
+
+/* --------------------------- NOTIFICATIONS ----------------------- */
+async function refreshNotifications() {
+  if (!window.NovaApi) return;
+  try {
+    const list = await NovaApi.notifications();
+    const unread = list.filter(n => !n.is_read).length;
+    const badge = document.getElementById('notifBadge');
+    if (badge) {
+      if (unread > 0) { badge.textContent = unread; badge.style.display = ''; }
+      else { badge.style.display = 'none'; }
+    }
+    const uc = document.getElementById('unreadCount');
+    if (uc) uc.textContent = unread + ' new';
+    refreshLiveActivity();
+  } catch (_) {}
+}
 
 /* =====================================================================
    NOVA v2 WIRING — store, AI, exports, workspaces, analytics, wizard
@@ -1058,12 +1181,7 @@ window.novaToast = novaToast;
 /* ----------------------------- EXPORTS --------------------------- */
 function exportPlan(fmt) {
   const st = NovaStore.getActiveStartup();
-  const name = (st && st.name) || (lastPlan && lastPlan.name) || 'Startup';
-  // ---- Backend mode: download the real server-generated file ----
-  if (NOVA_BACKEND && window.NovaApi && lastPlanId) {
-    const url = NovaApi.base + '/business-plans/' + lastPlanId + '/export/' + fmt;
-    return downloadAuthed(url, name.replace(/\s+/g, '-').toLowerCase() + '-business-plan.' + (fmt === 'docx' ? 'doc' : 'html'));
-  }
+  const name = (st && st.name) || 'Startup';
   if (fmt === 'pdf') return NovaExport.exportPDF(name + ' Business Plan');
   const root = document.getElementById('bpSections');
   const sections = [];
@@ -1076,27 +1194,17 @@ function exportPlan(fmt) {
   NovaExport.exportDOCX(name.replace(/\s+/g, '-').toLowerCase() + '-business-plan', name + ' — Business Plan', sections);
 }
 function exportDeck(fmt) {
-  const name = lastDeckStartup || 'Startup';
-  if (NOVA_BACKEND && window.NovaApi && lastDeckId) {
-    const url = NovaApi.base + '/pitch-decks/' + lastDeckId + '/export/' + fmt;
-    return downloadAuthed(url, name.replace(/\s+/g, '-').toLowerCase() + '-pitch-deck.html');
-  }
-  const slides = DECK_SLIDES.map(s => ({ title: s[0], body: s[2] }));
+  const name = lastDeckStartup || (NovaStore.getActiveStartup() && NovaStore.getActiveStartup().name) || 'Startup';
   if (fmt === 'pdf') return NovaExport.exportPDF(name + ' Pitch Deck');
+  // Pull current slides from the rendered deck.
+  const wrap = document.getElementById('pdResult');
+  const slides = [];
+  if (wrap) wrap.querySelectorAll('.deck-slide').forEach(d => {
+    const t = d.querySelector('h6'); const p = d.querySelector('p');
+    slides.push({ title: t ? t.textContent.trim() : 'Slide', body: p ? p.textContent.trim() : '' });
+  });
+  if (!slides.length) return novaToast('Generate a pitch deck first.');
   NovaExport.exportPPTX(name.replace(/\s+/g, '-').toLowerCase() + '-pitch-deck', name + ' — Pitch Deck', slides);
-}
-// Fetch a protected file with the bearer token and trigger a download.
-function downloadAuthed(url, filename) {
-  novaToast('Preparing export…');
-  fetch(url, { headers: { Authorization: 'Bearer ' + NovaApi.getToken() } })
-    .then(r => { if (!r.ok) throw new Error('Export failed (' + r.status + ')'); return r.blob(); })
-    .then(blob => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = filename;
-      document.body.appendChild(a); a.click();
-      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 200);
-    })
-    .catch(e => novaToast(e.message));
 }
 
 /* --------------------------- WORKSPACES -------------------------- */
@@ -1232,42 +1340,44 @@ function initAnalytics() {
 /* --------------------------- SETTINGS / AI ----------------------- */
 function hydrateSettings() {
   const s = NovaStore.getSettings();
-  const key = document.getElementById('setApiKey'); if (key) key.value = s.apiKey || '';
-  const demo = document.getElementById('setDemoMode'); if (demo) demo.checked = !!s.demoMode;
+  // Browser-side AI key field is deprecated. If the field exists we
+  // disable it and surface a server-managed message, but never read/write.
+  const key = document.getElementById('setApiKey');
+  if (key) {
+    key.value = '';
+    key.placeholder = 'Managed by your administrator (server-side).';
+    key.disabled = true;
+    key.setAttribute('aria-disabled', 'true');
+  }
+  const demo = document.getElementById('setDemoMode'); if (demo) { demo.checked = false; demo.disabled = true; }
   const sel = document.getElementById('setModel');
-  if (sel) { sel.innerHTML = NovaAI.MODELS.map(m => `<option value="${m.id}">${m.label}</option>`).join(''); sel.value = s.model; }
+  if (sel) {
+    sel.innerHTML = NovaAI.MODELS.map(m => `<option value="${m.id}">${m.label}</option>`).join('');
+    sel.value = s.model || NovaAI.MODELS[0].id;
+  }
   isDark = s.theme !== 'light';
   document.getElementById('htmlRoot').classList.toggle('lm', !isDark);
 }
-function onDemoToggle() {
-  const demo = document.getElementById('setDemoMode').checked;
-  NovaStore.updateSettings({ demoMode: demo });
-  updateAIStatus();
-}
+function onDemoToggle() { /* deprecated — server-managed */ }
 function saveAISettings(e) {
   if (e) e.preventDefault();
-  const apiKey = document.getElementById('setApiKey').value.trim();
-  const model = document.getElementById('setModel').value;
-  const demoMode = document.getElementById('setDemoMode').checked || !apiKey;
-  NovaStore.updateSettings({ apiKey, model, demoMode });
-  document.getElementById('setDemoMode').checked = demoMode;
+  const sel = document.getElementById('setModel');
+  const model = sel ? sel.value : '';
+  // Only the model preference is local. Provider keys are server-managed.
+  NovaStore.updateSettings({ model, demoMode: false, apiKey: '' });
   updateAIStatus();
-  novaToast(apiKey && !demoMode ? 'Connected to OpenRouter (' + model + ').' : 'Saved. Running in Demo Mode.');
+  novaToast('Saved. Provider keys are managed server-side.');
 }
 async function testAI(e) {
   if (e) e.preventDefault();
   const out = document.getElementById('aiTestResult');
+  if (!out) return;
   out.innerHTML = '<span style="color:var(--tx3)"><span class="spinner-border spinner-border-sm me-1"></span>Testing…</span>';
-  // temporarily apply unsaved values
-  const apiKey = document.getElementById('setApiKey').value.trim();
-  const model = document.getElementById('setModel').value;
-  const demoMode = document.getElementById('setDemoMode').checked || !apiKey;
-  NovaStore.updateSettings({ apiKey, model, demoMode });
   try {
-    const r = await NovaAI.chat([{ role: 'user', content: 'Reply with exactly: Nova online.' }], {});
-    out.innerHTML = '<span style="color:#34d399"><i class="fa-solid fa-circle-check me-1"></i>' + (demoMode ? 'Demo engine responding.' : 'Live: ' + escapeHtml(r.slice(0, 60))) + '</span>';
+    const reply = await NovaAI.chat([{ role: 'user', content: 'Reply with exactly: Nova online.' }], {});
+    out.innerHTML = '<span style="color:#34d399"><i class="fa-solid fa-circle-check me-1"></i>Live: ' + escapeHtml((reply || '').slice(0, 80)) + '</span>';
   } catch (err) {
-    out.innerHTML = '<span style="color:#f87171"><i class="fa-solid fa-circle-xmark me-1"></i>' + escapeHtml(err.message) + '</span>';
+    out.innerHTML = '<span style="color:#f87171"><i class="fa-solid fa-circle-xmark me-1"></i>' + escapeHtml(err.message || 'Test failed.') + '</span>';
   }
   updateAIStatus();
 }
@@ -1315,18 +1425,17 @@ window.onOnboardingComplete = function () {
 window.onStartupCreated = function (startup) {
   renderWorkspaceUI(); renderStartupCards();
   novaToast('Startup "' + startup.name + '" created.');
-  // Persist to Supabase when connected, then re-render with the mapped fresh row.
-  if (NOVA_BACKEND && window.NovaApi) {
+  // Persist to Supabase. Backend session is mandatory in v2.
+  if (window.NovaApi) {
     NovaApi.createStartup({
       name: startup.name, industry: startup.industry, country: startup.country,
       current_stage: startup.stage, logoFile: window._wzLogoFile || null,
     }).then(s => {
       remoteMap.startups[startup.id] = s.id;
-      // Reconcile the local row with the authoritative DB values (logo_url, score, stage).
       NovaStore.updateStartup(startup.id, mapStartupRow(s));
       window._wzLogoFile = null; window._wzLogoData = null;
       renderWorkspaceUI(); renderStartupCards();
-    }).catch(e => console.warn('Backend startup create failed:', e.message));
+    }).catch(e => novaToast('Backend create failed: ' + (e.message || 'unknown error')));
   }
   openStartup(startup.id, 'plans');
 };
@@ -1354,10 +1463,9 @@ function renderDocuments(type) {
   const grid = document.getElementById('docsGrid');
   const empty = document.getElementById('docsEmpty');
   if (!grid || !empty) return;
-  // ---- Backend mode: read persisted docs from generated_documents ----
-  if (NOVA_BACKEND && window.NovaApi && NovaApi.getDocuments) {
+  if (window.NovaApi && NovaApi.getDocuments) {
     NovaApi.getDocuments().then(rows => paintBackendDocuments(rows, type))
-      .catch(e => { console.warn('Load documents failed:', e.message); paintLocalDocuments(type); });
+      .catch(e => { grid.style.display = 'none'; empty.style.display = 'flex'; novaToast('Could not load documents: ' + (e.message || 'unknown error')); });
     return;
   }
   paintLocalDocuments(type);
@@ -1453,23 +1561,19 @@ function deleteDocument(startupId, type) {
 
 /* ===================== BILLING & UPGRADES ======================== */
 const BILLING_PLANS = [
-  { id: 'free', name: 'Free', price: 0, yearly: 0, blurb: 'Validate your idea and explore Nova.', features: ['1 startup workspace', '1 AI business plan', 'Readiness score', 'Basic Copilot'] },
-  { id: 'pro', name: 'Pro', price: 39, yearly: 27, blurb: 'For founders actively building & raising.', features: ['Unlimited business plans', 'Unlimited pitch decks', 'Full assessments', 'Funding & visa matching', 'Unlimited Copilot'], popular: true },
-  { id: 'startup', name: 'Startup', price: 99, yearly: 69, blurb: 'For teams scaling toward a round.', features: ['Everything in Pro', 'Up to 5 team seats', 'Investor-ready exports', 'Priority funding intros', 'Success manager'] }
+  { id: 'free',    name: 'Free',    price: 0,  yearly: 0,  blurb: 'Validate your idea and explore Nova.',          features: ['1 startup workspace', '1 AI business plan', 'Readiness score', 'Basic Copilot'] },
+  { id: 'pro',     name: 'Pro',     price: 39, yearly: 27, blurb: 'For founders actively building & raising.',     features: ['Unlimited business plans', 'Unlimited pitch decks', 'Full assessments', 'Funding & visa matching', 'Unlimited Copilot'], popular: true },
+  { id: 'startup', name: 'Startup', price: 99, yearly: 69, blurb: 'For teams scaling toward a round.',             features: ['Everything in Pro', 'Up to 5 team seats', 'Investor-ready exports', 'Priority funding intros', 'Success manager'] }
 ];
-const BILLING_HISTORY = [
-  { date: 'Jun 1, 2026', desc: 'Pro Plan — Monthly', amount: '$39.00', status: 'Paid', invoice: 'INV-2026-0601' },
-  { date: 'May 1, 2026', desc: 'Pro Plan — Monthly', amount: '$39.00', status: 'Paid', invoice: 'INV-2026-0501' },
-  { date: 'Apr 1, 2026', desc: 'Pro Plan — Monthly', amount: '$39.00', status: 'Paid', invoice: 'INV-2026-0401' }
-];
-function renderBilling() {
-  const currentPlan = (currentUser && currentUser.plan) ? currentUser.plan.replace(/\s*plan/i, '').trim().toLowerCase() : 'pro';
-  // payment history
+
+async function renderBilling() {
+  const currentPlan = (currentUser && currentUser.plan_tier) ? String(currentUser.plan_tier).toLowerCase() : 'free';
+
+  // History row template (filled in once payments load).
   const t = document.getElementById('billingHistoryTable');
-  if (t) t.innerHTML = '<thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th><th>Invoice</th></tr></thead><tbody>' +
-    BILLING_HISTORY.map(h => `<tr><td>${h.date}</td><td>${h.desc}</td><td>${h.amount}</td><td><span class="bst son">${h.status}</span></td>
-      <td><button class="boc btn py-1 px-2" style="font-size:.74rem" onclick="novaToast('Invoice ${h.invoice} download is backend-driven.')"><i class="fa-solid fa-download me-1"></i>${h.invoice}</button></td></tr>`).join('') + '</tbody>';
-  // upgrade grid
+  if (t) t.innerHTML = '<thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th><th>Receipt</th></tr></thead><tbody><tr><td colspan="5" style="text-align:center;color:var(--tx3);padding:18px"><span class="spinner-border spinner-border-sm me-2"></span>Loading…</td></tr></tbody>';
+
+  // Upgrade grid (always renders immediately).
   const grid = document.getElementById('billingUpgradeGrid');
   if (grid) grid.innerHTML = BILLING_PLANS.map(p => {
     const isCurrent = p.id === currentPlan;
@@ -1477,29 +1581,75 @@ function renderBilling() {
     <div class="col-md-4">
       <div class="nova-panel h-100" style="${p.popular ? 'border-color:rgba(139,92,246,.4)' : ''};position:relative">
         ${p.popular ? '<span class="bst son" style="position:absolute;top:14px;right:14px"><i class="fa-solid fa-star me-1"></i>Popular</span>' : ''}
-        <div style="font-size:.82rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3);margin-bottom:8px">${p.name}</div>
+        <div style="font-size:.82rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3);margin-bottom:8px">${escapeHtml(p.name)}</div>
         <div class="pamt mb-1"><sup>$</sup>${p.price}<span style="font-size:.85rem;color:var(--tx3)">/mo</span></div>
-        <p style="font-size:.82rem;color:var(--tx2);margin:10px 0 14px;padding-bottom:14px;border-bottom:1px solid var(--bd)">${p.blurb}</p>
-        ${p.features.map(f => `<div class="d-flex align-items-center gap-2 mb-2" style="font-size:.82rem;color:var(--tx2)"><i class="fa-solid fa-check" style="color:#34d399"></i>${f}</div>`).join('')}
-        <button class="${isCurrent ? 'boc' : 'bgrd'} btn w-100 py-2 mt-3" style="font-size:.85rem" ${isCurrent ? 'disabled' : ''} onclick="selectPlan('${p.id}','${p.name}',${p.price})">${isCurrent ? 'Current Plan' : 'Select Plan'}</button>
+        <p style="font-size:.82rem;color:var(--tx2);margin:10px 0 14px;padding-bottom:14px;border-bottom:1px solid var(--bd)">${escapeHtml(p.blurb)}</p>
+        ${p.features.map(f => `<div class="d-flex align-items-center gap-2 mb-2" style="font-size:.82rem;color:var(--tx2)"><i class="fa-solid fa-check" style="color:#34d399"></i>${escapeHtml(f)}</div>`).join('')}
+        <button class="${isCurrent ? 'boc' : 'bgrd'} btn w-100 py-2 mt-3" style="font-size:.85rem" ${isCurrent || p.id === 'free' ? 'disabled' : ''} onclick="selectPlan('${p.id}')">${isCurrent ? 'Current Plan' : (p.id === 'free' ? 'Default' : 'Select Plan')}</button>
       </div>
     </div>`;
   }).join('');
-  // current plan summary
-  const cp = BILLING_PLANS.find(p => p.id === currentPlan) || BILLING_PLANS[1];
-  setText('billingPlanName', cp.name + ' Plan');
-  setText('billingPlanPrice', cp.price);
+
+  // Real subscription + history from the database.
+  try {
+    const sub = await NovaApi.getMySubscription();
+    const cp = BILLING_PLANS.find(p => p.id === (sub ? String(sub.plan_tier).toLowerCase() : currentPlan)) || BILLING_PLANS[0];
+    setText('billingPlanName', cp.name + ' Plan');
+    setText('billingPlanPrice', cp.price);
+    const status = document.getElementById('billingPlanStatus');
+    if (status) {
+      if (sub && sub.cancel_at_period_end) status.textContent = 'Cancels ' + new Date(sub.current_period_end).toLocaleDateString();
+      else if (sub) status.textContent = 'Renews ' + (sub.current_period_end ? new Date(sub.current_period_end).toLocaleDateString() : '—');
+      else status.textContent = 'Free plan';
+    }
+  } catch (_) {}
+
+  try {
+    const payments = await NovaApi.getMyPayments();
+    if (t) {
+      if (!payments.length) {
+        t.innerHTML = '<thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th><th>Receipt</th></tr></thead><tbody><tr><td colspan="5" style="text-align:center;color:var(--tx3);padding:18px">No payments yet.</td></tr></tbody>';
+      } else {
+        t.innerHTML = '<thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th><th>Receipt</th></tr></thead><tbody>' +
+          payments.map(p => {
+            const amount = (p.amount_cents / 100).toLocaleString(undefined, { style: 'currency', currency: (p.currency || 'usd').toUpperCase() });
+            const dt = new Date(p.created_at).toLocaleDateString();
+            const statusBadge = p.status === 'succeeded'
+              ? '<span class="bst son">Paid</span>'
+              : '<span class="bst" style="background:rgba(248,113,113,.12);color:#f87171">' + escapeHtml(p.status) + '</span>';
+            const receipt = p.receipt_url
+              ? `<a class="boc btn py-1 px-2" style="font-size:.74rem" target="_blank" rel="noopener" href="${escapeHtml(p.receipt_url)}"><i class="fa-solid fa-arrow-up-right-from-square me-1"></i>View</a>`
+              : '<span style="color:var(--tx3)">—</span>';
+            return `<tr><td>${dt}</td><td>${escapeHtml(p.description || 'Subscription')}</td><td>${amount}</td><td>${statusBadge}</td><td>${receipt}</td></tr>`;
+          }).join('') + '</tbody>';
+      }
+    }
+  } catch (e) {
+    if (t) t.innerHTML = '<thead><tr><th colspan="5">Could not load payments</th></tr></thead><tbody></tbody>';
+  }
 }
-function selectPlan(id, name, price) {
-  if (currentUser) currentUser.plan = name + ' Plan';
-  setText('userPlan', name + ' Plan'); setText('pdPlan', name + ' Plan');
-  renderBilling();
-  novaToast('Selected the ' + name + ' plan. Checkout is backend-driven (coming soon).');
+
+async function selectPlan(id) {
+  if (id === 'free' || !id) return;
+  const cycle = (document.getElementById('ptog') && document.getElementById('ptog').checked) ? 'yearly' : 'monthly';
+  const btn = (event && event.target && event.target.closest('button')) || null;
+  if (btn) { btn.disabled = true; btn.dataset.html = btn.innerHTML; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Redirecting…'; }
+  try {
+    const res = await NovaApi.startCheckout(id, cycle);
+    if (res && res.url) { window.location.href = res.url; return; }
+    novaToast('Could not start checkout.');
+  } catch (e) {
+    novaToast('Checkout failed: ' + (e.message || 'unknown error'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.html || 'Select Plan'; }
+  }
 }
-function cancelPlan() {
+
+async function cancelPlan() {
   if (!confirm('Cancel your subscription? You will keep access until the end of the billing period.')) return;
-  setText('billingPlanStatus', 'Cancels Jul 1');
-  novaToast('Subscription set to cancel at period end.');
+  novaToast('Subscription cancellation must be done from your Stripe billing portal — we\'ll set this up shortly.');
+  // NOTE: a /api/stripe-portal endpoint is the next step; for now we surface
+  // a message rather than fake the cancellation.
 }
 
 /* ===================== STARTUP EDIT / DELETE ===================== */
@@ -1515,18 +1665,15 @@ function removeStartup(id) {
   const s = NovaStore.getStartup(id);
   if (!s) return;
   if (!confirm('Delete "' + s.name + '"? All its documents and data will be removed.')) return;
-  // Backend mode: delete the Supabase row first, then re-render from fresh state.
-  if (NOVA_BACKEND && window.NovaApi) {
-    const remoteId = remoteMap.startups[id];
-    const finish = () => { NovaStore.deleteStartup(id); delete remoteMap.startups[id]; renderWorkspaceUI(); renderStartupCards(); novaToast('Startup deleted.'); };
-    if (remoteId) {
-      NovaApi.deleteStartup(remoteId).then(finish).catch(e => novaToast('Delete failed: ' + e.message));
-    } else { finish(); }
-    return;
-  }
-  NovaStore.deleteStartup(id);
-  renderWorkspaceUI(); renderStartupCards();
-  novaToast('Startup deleted.');
+  const remoteId = remoteMap.startups[id];
+  const finish = () => {
+    NovaStore.deleteStartup(id); delete remoteMap.startups[id];
+    renderWorkspaceUI(); renderStartupCards();
+    novaToast('Startup deleted.');
+  };
+  if (window.NovaApi && remoteId) {
+    NovaApi.deleteStartup(remoteId).then(finish).catch(e => novaToast('Delete failed: ' + (e.message || 'unknown error')));
+  } else { finish(); }
 }
 
 /* ===================== WIZARD LOGO PREVIEW ======================= */

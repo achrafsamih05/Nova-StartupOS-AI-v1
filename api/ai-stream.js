@@ -1,38 +1,40 @@
 // =====================================================================
-// Nova StartupOS AI — Secure AI Streaming Proxy (Vercel Serverless / Node.js)
+// Nova StartupOS AI — Secure AI Streaming Proxy (Vercel / Node.js)
 // ---------------------------------------------------------------------
-// Route:  POST /api/ai-stream   (mapped in vercel.json)
+// Route:  POST /api/ai-stream  (rewritten in vercel.json)
 //
-// Responsibilities:
-//   1. Verify the caller's Supabase JWT (Authorization: Bearer <token>).
-//   2. Read the active provider + cost/priority/model from the
-//      `ai_providers_config` table using the SERVICE ROLE key
-//      (server-only — never exposed to the browser).
-//   3. Inject the hidden master system prompt, call the upstream provider
-//      (OpenRouter / OpenAI / DeepSeek / Gemini-compatible chat endpoint),
-//      and stream the tokens back to the client as Server-Sent Events.
-//
-// The frontend (js/ai.js -> NovaAI.generateStream) reads this SSE stream,
-// parsing `data: {...}` lines and extracting choices[0].delta.content.
+// Hardening (v2):
+//   • JWT verified via shared verifyAuth() helper.
+//   • Per-user daily rate limit (AI_DAILY_LIMIT, default 200).
+//   • Provider chosen from ai_providers_config by priority + is_default,
+//     with fallback to the next enabled provider on upstream failure.
+//   • IP allowlist consulted via blocked_ips.
+//   • Each invocation persists a row in ai_requests (status / cost / sizes).
+//   • CORS allowlisted via ALLOWED_ORIGINS.
+//   • Hidden master system prompt never leaves the server.
 // =====================================================================
 
-const { createClient } = require('@supabase/supabase-js');
-
-// ---- Server-only configuration (Vercel Environment Variables) --------
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const {
+  applyCors, handlePreflight, jsonError, readJsonBody, verifyAuth,
+  checkRateLimit, incrementUsage, recordAiRequest, recordAudit,
+  clientIp, getServiceClient,
+} = require('./_lib/auth');
 
 // Per-provider upstream endpoints + the env var holding each secret key.
-// All four use the OpenAI-compatible /chat/completions streaming shape.
+// Anthropic and Gemini have their own native APIs but require slightly
+// different request bodies — we route them through OpenRouter when the
+// dedicated key is missing, so existing OpenRouter setups keep working.
 const PROVIDERS = {
-  openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY' },
-  openai:     { url: 'https://api.openai.com/v1/chat/completions',     keyEnv: 'OPENAI_API_KEY' },
-  deepseek:   { url: 'https://api.deepseek.com/v1/chat/completions',   keyEnv: 'DEEPSEEK_API_KEY' },
-  gemini:     { url: 'https://openrouter.ai/api/v1/chat/completions',  keyEnv: 'OPENROUTER_API_KEY' }, // via OpenRouter
-  anthropic:  { url: 'https://openrouter.ai/api/v1/chat/completions',  keyEnv: 'OPENROUTER_API_KEY' }  // via OpenRouter
+  openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions',                   keyEnv: 'OPENROUTER_API_KEY', native: true },
+  openai:     { url: 'https://api.openai.com/v1/chat/completions',                      keyEnv: 'OPENAI_API_KEY',     native: true },
+  deepseek:   { url: 'https://api.deepseek.com/v1/chat/completions',                    keyEnv: 'DEEPSEEK_API_KEY',   native: true },
+  anthropic:  { url: 'https://api.anthropic.com/v1/messages',                           keyEnv: 'ANTHROPIC_API_KEY',  native: 'anthropic' },
+  gemini:     { url: 'https://generativelanguage.googleapis.com/v1beta/models',         keyEnv: 'GEMINI_API_KEY',     native: 'gemini' },
 };
 
-// The hidden master system prompt — never sent from / visible to the client.
+const AI_DAILY_LIMIT = parseInt(process.env.AI_DAILY_LIMIT || '200', 10);
+const AI_MAX_TOKENS  = parseInt(process.env.AI_MAX_TOKENS  || '2048', 10);
+
 const MASTER_SYSTEM_PROMPT =
   'You are Nova, an AI co-founder inside Nova StartupOS AI. You help founders ' +
   'turn ideas into investment-ready startups: business plans, pitch decks, ' +
@@ -40,146 +42,197 @@ const MASTER_SYSTEM_PROMPT =
   'Be concise, structured, practical, and encouraging. Use clear section ' +
   'headings when producing documents.';
 
-// SSE helper: write one event frame to the response.
 function sseWrite(res, obj) {
   res.write('data: ' + JSON.stringify(obj) + '\n\n');
 }
 
-module.exports = async (req, res) => {
-  // ---- CORS preflight (headers also set globally in vercel.json) ----
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    return res.status(204).end();
-  }
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+// Resolve enabled providers ordered by priority, with the fallback to OpenRouter
+// when a provider's dedicated key is absent.
+async function resolveProviderChain(admin, requestedModel) {
+  const { data: configs, error } = await admin
+    .from('ai_providers_config')
+    .select('provider_name, enabled, priority, is_default, default_model')
+    .eq('enabled', true)
+    .order('is_default', { ascending: false })
+    .order('priority',   { ascending: true });
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    return res.status(500).json({ error: 'Server is not configured (missing Supabase env vars).' });
-  }
+  if (error) throw new Error('Could not read AI provider config.');
+  if (!configs || !configs.length) throw new Error('No AI provider is currently enabled.');
 
-  try {
-    // ---- 1. Verify the Supabase JWT --------------------------------
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) return res.status(401).json({ error: 'Missing bearer token.' });
-
-    // Service-role client (bypasses RLS — used only for trusted server reads).
-    const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { autoRefreshToken: false, persistSession: false }
-    });
-
-    // Resolve the user from the JWT; reject if invalid/expired.
-    const { data: userData, error: userErr } = await admin.auth.getUser(token);
-    if (userErr || !userData || !userData.user) {
-      return res.status(401).json({ error: 'Invalid or expired session.' });
+  return configs.map((c) => {
+    const meta = PROVIDERS[c.provider_name];
+    if (!meta) return null;
+    let url = meta.url;
+    let keyEnv = meta.keyEnv;
+    let nativeShape = meta.native;
+    // Fallback to OpenRouter if the native key is absent.
+    if (!process.env[keyEnv] && process.env.OPENROUTER_API_KEY) {
+      url = PROVIDERS.openrouter.url;
+      keyEnv = PROVIDERS.openrouter.keyEnv;
+      nativeShape = true;
     }
+    return {
+      name: c.provider_name,
+      url,
+      keyEnv,
+      nativeShape,
+      model: requestedModel || c.default_model || 'google/gemini-flash-1.5',
+    };
+  }).filter(Boolean).filter((p) => process.env[p.keyEnv]);
+}
 
-    // ---- 2. Parse the request body ---------------------------------
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const prompt = (body.prompt || '').toString();
-    const clientSystem = (body.systemPrompt || '').toString();
-    let model = (body.model || '').toString();
-    if (!prompt.trim()) return res.status(400).json({ error: 'Prompt is required.' });
+// Open the SSE stream and pipe an OpenAI-compatible response through.
+async function streamOpenAiCompatible(res, prov, messages) {
+  const upstream = await fetch(prov.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + process.env[prov.keyEnv],
+      'HTTP-Referer': 'https://novastartupos.ai',
+      'X-Title': 'Nova StartupOS AI',
+    },
+    body: JSON.stringify({
+      model: prov.model,
+      messages,
+      stream: true,
+      max_tokens: AI_MAX_TOKENS,
+    }),
+  });
 
-    // ---- 3. Resolve the routing provider from ai_providers_config --
-    // Pick enabled providers ordered by priority (lowest number first);
-    // honor is_default as the tie-breaker / primary.
-    const { data: configs, error: cfgErr } = await admin
-      .from('ai_providers_config')
-      .select('provider_name, enabled, priority, is_default, default_model')
-      .eq('enabled', true)
-      .order('priority', { ascending: true });
+  if (!upstream.ok || !upstream.body) {
+    const errText = await upstream.text().catch(() => upstream.statusText);
+    throw new Error('Upstream ' + upstream.status + ': ' + errText.slice(0, 300));
+  }
 
-    if (cfgErr) return res.status(500).json({ error: 'Could not read AI provider config.' });
-    if (!configs || !configs.length) {
-      return res.status(503).json({ error: 'No AI provider is currently enabled.' });
-    }
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let totalChars = 0;
 
-    const chosen = configs.find(c => c.is_default) || configs[0];
-    const providerName = chosen.provider_name;
-    if (!model) model = chosen.default_model || 'google/gemini-flash-1.5';
-
-    const providerMeta = PROVIDERS[providerName];
-    if (!providerMeta) return res.status(500).json({ error: 'Unknown provider: ' + providerName });
-
-    const apiKey = process.env[providerMeta.keyEnv];
-    if (!apiKey) return res.status(500).json({ error: 'Server key missing for provider: ' + providerName });
-
-    // ---- 4. Open the SSE stream to the client ----------------------
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-
-    // Compose messages: master prompt + (optional) client context + user prompt.
-    const messages = [
-      { role: 'system', content: MASTER_SYSTEM_PROMPT },
-      ...(clientSystem ? [{ role: 'system', content: clientSystem }] : []),
-      { role: 'user', content: prompt }
-    ];
-
-    // ---- 5. Call the upstream provider (streaming) -----------------
-    const upstream = await fetch(providerMeta.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiKey,
-        // OpenRouter attribution headers (ignored by other providers).
-        'HTTP-Referer': 'https://novastartupos.ai',
-        'X-Title': 'Nova StartupOS AI'
-      },
-      body: JSON.stringify({ model, messages, stream: true })
-    });
-
-    if (!upstream.ok || !upstream.body) {
-      const errText = await upstream.text().catch(() => upstream.statusText);
-      sseWrite(res, { error: 'Upstream error ' + upstream.status + ': ' + errText.slice(0, 300) });
-      res.write('data: [DONE]\n\n');
-      return res.end();
-    }
-
-    // ---- 6. Pipe the upstream SSE through to the client ------------
-    // We re-emit the same OpenAI-compatible `data: {...}` frames so the
-    // frontend parser (choices[0].delta.content) works unchanged.
-    const reader = upstream.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.indexOf('data:') !== 0) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') continue;
-        try {
-          const json = JSON.parse(data);
-          const delta = json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
-          if (delta) sseWrite(res, { choices: [{ delta: { content: delta } }] });
-        } catch (e) {
-          // partial JSON split across chunks — ignore and continue buffering
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.indexOf('data:') !== 0) continue;
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') continue;
+      try {
+        const json = JSON.parse(data);
+        const delta = json.choices && json.choices[0] && json.choices[0].delta && json.choices[0].delta.content;
+        if (delta) {
+          totalChars += delta.length;
+          sseWrite(res, { choices: [{ delta: { content: delta } }] });
         }
-      }
+      } catch (_) { /* partial chunk */ }
     }
-
-    // Signal completion to the client and close the stream.
-    res.write('data: [DONE]\n\n');
-    res.end();
-  } catch (err) {
-    // If headers were already sent (mid-stream), emit an SSE error frame.
-    if (res.headersSent) {
-      sseWrite(res, { error: (err && err.message) || 'Stream failed.' });
-      res.write('data: [DONE]\n\n');
-      return res.end();
-    }
-    return res.status(500).json({ error: (err && err.message) || 'Internal error.' });
   }
+  return totalChars;
+}
+
+module.exports = async (req, res) => {
+  if (handlePreflight(req, res, 'POST, OPTIONS')) return;
+  if (req.method !== 'POST') return jsonError(res, 405, 'Method not allowed');
+
+  // ---- 1. Auth ------------------------------------------------------
+  let auth;
+  try { auth = await verifyAuth(req); }
+  catch (e) { return jsonError(res, 500, e.message); }
+  if (!auth) return jsonError(res, 401, 'Invalid or expired session.');
+
+  const { profile } = auth;
+  const ip = clientIp(req);
+
+  // ---- 2. IP block check -------------------------------------------
+  if (ip) {
+    try {
+      const admin = getServiceClient();
+      const { data: blocked } = await admin
+        .from('blocked_ips').select('id').eq('ip_address', ip).maybeSingle();
+      if (blocked) {
+        await recordAiRequest({ user_id: profile.id, status: 'blocked', error_message: 'ip_blocked', ip_address: ip });
+        return jsonError(res, 403, 'Access denied.');
+      }
+    } catch (_) { /* don't fail the request on side-channel errors */ }
+  }
+
+  // ---- 3. Rate limit ------------------------------------------------
+  const rl = await checkRateLimit(profile.id, 'ai_requests', AI_DAILY_LIMIT);
+  if (!rl.ok) {
+    await recordAiRequest({
+      user_id: profile.id, status: 'rate_limited',
+      error_message: `daily limit ${rl.limit} reached`, ip_address: ip,
+    });
+    return jsonError(res, 429, 'Daily AI quota exhausted.', { limit: rl.limit, current: rl.current });
+  }
+
+  // ---- 4. Body validation ------------------------------------------
+  const body = await readJsonBody(req);
+  const prompt = (body.prompt || '').toString();
+  const clientSystem = (body.systemPrompt || '').toString();
+  const requestedModel = (body.model || '').toString();
+  if (!prompt.trim()) return jsonError(res, 400, 'Prompt is required.');
+  if (prompt.length > 16000) return jsonError(res, 413, 'Prompt is too long.');
+
+  // ---- 5. Provider chain --------------------------------------------
+  const admin = getServiceClient();
+  let chain;
+  try { chain = await resolveProviderChain(admin, requestedModel); }
+  catch (e) { return jsonError(res, 503, e.message); }
+  if (!chain.length) return jsonError(res, 503, 'No AI provider key is configured on the server.');
+
+  // ---- 6. Stream + fallback ----------------------------------------
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const messages = [
+    { role: 'system', content: MASTER_SYSTEM_PROMPT },
+    ...(clientSystem ? [{ role: 'system', content: clientSystem }] : []),
+    { role: 'user',   content: prompt },
+  ];
+
+  let providerUsed = null;
+  let completionChars = 0;
+  let lastErr = null;
+
+  for (const prov of chain) {
+    try {
+      providerUsed = prov.name;
+      completionChars = await streamOpenAiCompatible(res, prov, messages);
+      lastErr = null;
+      break; // success
+    } catch (e) {
+      lastErr = e;
+      // If we already wrote SSE bytes, abort fallback (client sees partial).
+      if (res.headersSent && res.writableLength > 0) break;
+    }
+  }
+
+  if (lastErr) {
+    sseWrite(res, { error: 'AI service unavailable: ' + lastErr.message });
+  }
+  res.write('data: [DONE]\n\n');
+  res.end();
+
+  // ---- 7. Telemetry (fire-and-forget) -------------------------------
+  await Promise.all([
+    incrementUsage(profile.id, 'ai_requests', 1),
+    recordAiRequest({
+      user_id: profile.id,
+      provider_name: providerUsed,
+      model: chain[0] ? chain[0].model : null,
+      prompt_chars: prompt.length,
+      completion_chars: completionChars,
+      status: lastErr ? 'error' : 'ok',
+      error_message: lastErr ? lastErr.message.slice(0, 500) : null,
+      ip_address: ip,
+    }),
+    recordAudit(profile, 'ai.request', 'ai_requests', null,
+                { provider: providerUsed, prompt_chars: prompt.length }, ip),
+  ]).catch(() => {});
 };

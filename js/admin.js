@@ -106,22 +106,21 @@
   /* ---- Loaders (called by dbNav hook) ---- */
   function load(section) {
     if (!global.NovaApi) return;
-    const A = NovaApi.admin;
     switch (section) {
-      case 'a-overview': return loadOverview(A);
-      case 'a-users': return loadUsers(A);
-      case 'a-billing': return loadBilling(A);
-      case 'a-funding': return loadFunding(A);
-      case 'a-visa': return loadVisa(A);
-      case 'a-blog': return loadBlog(A);
-      case 'a-cms': return loadCms(A);
-      case 'a-support': return loadSupport(A);
-      case 'a-audit': return loadAudit(A);
-      case 's-ai': return loadAi(A);
-      case 's-gateways': return loadGateways(A);
-      case 's-email': return loadEmail(A);
-      case 's-security': return loadSecurity(A);
-      case 's-system': return loadSystem(A);
+      case 'a-overview': return loadOverview();
+      case 'a-users':    return loadUsers();
+      case 'a-billing':  return loadBilling();
+      case 'a-funding':  return loadFunding();
+      case 'a-visa':     return loadVisa();
+      case 'a-blog':     return loadBlog();
+      case 'a-cms':      return loadCms();
+      case 'a-support':  return loadSupport();
+      case 'a-audit':    return loadAudit();
+      case 's-ai':       return loadAi();
+      case 's-gateways': return loadGateways();
+      case 's-email':    return loadEmail();
+      case 's-security': return loadSecurity();
+      case 's-system':   return loadSystem();
     }
   }
 
@@ -154,32 +153,29 @@
     if (crudHandler) crudHandler(data);
   }
 
-  function loadOverview(A) {
+  function loadOverview() {
     const apply = d => {
       document.getElementById('adminStats').innerHTML =
         card(d.users, 'Total Users', '#a78bfa') + card(d.active_subscriptions, 'Active Subs', '#34d399') +
-        card(d.startups, 'Startups', '#60a5fa') + card('$' + (d.revenue || 0), 'Revenue', '#fbbf24');
+        card(d.startups, 'Startups', '#60a5fa') + card('$' + (d.revenue || 0).toLocaleString(), 'Revenue', '#fbbf24');
       const recent = d.recent_users || [];
       document.getElementById('adminRecent').innerHTML = recent.length ? recent.map(u =>
         `<div class="d-flex justify-content-between py-2" style="border-top:1px solid var(--bd);font-size:.85rem"><span>${esc(u.name)} <span style="color:var(--tx3)">${esc(u.email)}</span></span><span style="color:var(--tx3)">${u.created_at ? new Date(u.created_at).toLocaleDateString() : ''}</span></div>`).join('') : '<div style="color:var(--tx3)">No recent signups.</div>';
       drawRevenueChart(d.revenue_history);
     };
-    // Prefer Supabase aggregation; fall back to the legacy dashboard endpoint.
-    if (global.NovaApi && NovaApi.adminGetStats) {
-      NovaApi.adminGetStats()
-        .then(stats => {
-          // Enrich with recent signups from profiles when available.
-          if (NovaApi.adminGetUsers) {
-            NovaApi.adminGetUsers().then(users => {
-              stats.recent_users = (users || []).slice(0, 6).map(u => ({ name: u.name || (u.email ? u.email.split('@')[0] : '—'), email: u.email || '', created_at: u.created_at }));
-              apply(stats);
-            }).catch(() => apply(stats));
-          } else { apply(stats); }
-        })
-        .catch(() => A.dashboard().then(apply).catch(e => { toastErr(e); drawRevenueChart(null); }));
-      return;
-    }
-    A.dashboard().then(apply).catch(e => { toastErr(e); drawRevenueChart(null); });
+    NovaApi.adminGetStats()
+      .then(stats => Promise.all([
+        NovaApi.adminGetUsers().catch(() => []),
+        NovaApi.adminGetRevenueHistory().catch(() => []),
+      ]).then(([users, history]) => {
+        stats.recent_users = (users || []).slice(0, 6).map(u => ({
+          name: u.name || (u.email ? u.email.split('@')[0] : '—'),
+          email: u.email || '', created_at: u.created_at,
+        }));
+        stats.revenue_history = (history || []).map(h => Math.round((h.total_cents || 0) / 100));
+        apply(stats);
+      }))
+      .catch(e => { toastErr(e); drawRevenueChart(null); });
   }
   let revChart = null;
   function drawRevenueChart(history) {
@@ -187,7 +183,7 @@
     if (!ctx || !global.Chart) return;
     if (revChart) { revChart.destroy(); revChart = null; }
     const labels = ['Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-    const data = (Array.isArray(history) && history.length) ? history : [4200, 5100, 6300, 5900, 7200, 8100, 9400, 10200, 11800, 12600, 13900, 15200];
+    const data = (Array.isArray(history) && history.length === 12) ? history : new Array(12).fill(0);
     const c = ctx.getContext('2d');
     const g = c.createLinearGradient(0, 0, 0, 260);
     g.addColorStop(0, 'rgba(139,92,246,0.35)'); g.addColorStop(1, 'rgba(59,130,246,0.02)');
@@ -198,147 +194,170 @@
       type: 'line',
       data: { labels, datasets: [{ label: 'Revenue ($)', data, fill: true, backgroundColor: g, borderColor: '#8b5cf6', borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 5, tension: .4 }] },
       options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: x => ' $' + x.parsed.y.toLocaleString() } } },
-        scales: { x: { grid: { color: grid }, ticks: { color: ticks, font: { family: 'Space Grotesk', size: 11 } } }, y: { grid: { color: grid }, ticks: { color: ticks, font: { family: 'Space Grotesk', size: 11 }, callback: v => '$' + (v / 1000) + 'k' } } } }
+        scales: { x: { grid: { color: grid }, ticks: { color: ticks, font: { family: 'Space Grotesk', size: 11 } } }, y: { grid: { color: grid }, ticks: { color: ticks, font: { family: 'Space Grotesk', size: 11 }, callback: v => '$' + (v / 1000).toFixed(1) + 'k' } } } }
     });
   }
-  function loadUsers(A) { A.users().then(r => { const rows = (r.data && r.data.data) ? r.data.data : (r.data || []); paintUsers(rows); }).catch(e => toastErr(e)); }
+  function loadUsers() { NovaApi.adminGetUsers().then(rows => paintUsers(rows.map(_userRow))).catch(e => toastErr(e)); }
+  function _userRow(p) {
+    return {
+      id: p.id, name: p.name || (p.email ? p.email.split('@')[0] : '—'),
+      email: p.email || '', roles: p.role ? [p.role] : [],
+      is_active: p.is_active !== false, plan_tier: p.plan_tier,
+    };
+  }
   function paintUsers(rows) {
     const t = document.getElementById('adminUsersTable');
     t.innerHTML = '<thead><tr><th>Name</th><th>Email</th><th>Roles</th><th>Status</th><th></th></tr></thead><tbody>' +
-      rows.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${(u.roles || []).map(r => esc(r.name || r)).join(', ')}</td>
-        <td><span class="bst ${u.is_active ? 'son' : ''}" ${u.is_active ? '' : 'style="background:rgba(239,68,68,.12);color:#f87171"'}>${u.is_active ? 'Active' : 'Disabled'}</span></td>
-        <td class="d-flex gap-1"><button class="boc btn py-1 px-2" style="font-size:.75rem" onclick='NovaAdmin.editUser(${JSON.stringify({ id: u.id, name: u.name, email: u.email })})'>Edit</button>
-        <button class="boc btn py-1 px-2" style="font-size:.75rem" onclick="NovaAdmin.toggleUser(${u.id})">${u.is_active ? 'Suspend' : 'Activate'}</button>
-        <button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delUser(${u.id})">Delete</button></td></tr>`).join('') +
+      rows.map(u => {
+        const safe = encodeURIComponent(JSON.stringify({ id: u.id, name: u.name, email: u.email }));
+        const idAttr = String(u.id);
+        return `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${(u.roles || []).map(r => esc(r.name || r)).join(', ')}</td>
+          <td><span class="bst ${u.is_active ? 'son' : ''}" ${u.is_active ? '' : 'style="background:rgba(239,68,68,.12);color:#f87171"'}>${u.is_active ? 'Active' : 'Disabled'}</span></td>
+          <td class="d-flex gap-1">
+            <button class="boc btn py-1 px-2" style="font-size:.75rem" data-user="${safe}" onclick="NovaAdmin.editUserFromButton(this)">Edit</button>
+            <button class="boc btn py-1 px-2" style="font-size:.75rem" onclick="NovaAdmin.toggleUser('${esc(idAttr)}')">${u.is_active ? 'Suspend' : 'Activate'}</button>
+            <button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delUser('${esc(idAttr)}')">Delete</button>
+          </td></tr>`;
+      }).join('') +
       '</tbody>';
+  }
+  function editUserFromButton(btn) {
+    try { const u = JSON.parse(decodeURIComponent(btn.getAttribute('data-user'))); editUser(u); } catch (_) {}
   }
   function editUser(u) {
     openCrud('Edit User', [
-      { name: 'name', label: 'Full name', value: u.name, required: true },
-      { name: 'email', label: 'Email', type: 'email', value: u.email, required: true }
+      { name: 'name',  label: 'Full name', value: u.name,  required: true },
+      { name: 'email', label: 'Email',     type: 'email', value: u.email, required: true },
     ], data => {
-      if (NovaApi.admin.updateUser) NovaApi.admin.updateUser(u.id, data).then(() => { loadUsers(NovaApi.admin); novaToast('User updated.'); }).catch(e => toastErr(e));
-      else novaToast('User updated (UI only).');
+      NovaApi.adminUpdateUser(u.id, data)
+        .then(() => { loadUsers(); novaToast('User updated.'); })
+        .catch(e => toastErr(e));
     });
   }
   function delUser(id) {
     if (!confirm('Delete this user account? This cannot be undone.')) return;
-    if (NovaApi.admin.deleteUser) NovaApi.admin.deleteUser(id).then(() => { loadUsers(NovaApi.admin); novaToast('User deleted.'); }).catch(e => toastErr(e));
-    else novaToast('User deleted (UI only).');
+    NovaApi.adminDeleteUser(id).then(() => { loadUsers(); novaToast('User deleted.'); }).catch(e => toastErr(e));
   }
-  function searchUsers(q) { NovaApi.admin.users(q).then(r => paintUsers(r.data.data || r.data || [])).catch(() => {}); }
-  function toggleUser(id) { NovaApi.admin.toggleUser(id).then(() => { loadUsers(NovaApi.admin); global.novaToast && novaToast('User updated.'); }).catch(e => toastErr(e)); }
+  function searchUsers(q) { NovaApi.adminGetUsers(q).then(rows => paintUsers(rows.map(_userRow))).catch(() => {}); }
+  function toggleUser(id) { NovaApi.adminToggleUser(id).then(() => { loadUsers(); global.novaToast && novaToast('User updated.'); }).catch(e => toastErr(e)); }
 
-  function loadBilling(A) {
-    // Admin sees the plan catalog (subscription configuration).
-    A.plans().then(plans => {
+  function loadBilling() {
+    NovaApi.admin.plans().then(plans => {
       const t = document.getElementById('adminBillingTable');
-      t.innerHTML = '<thead><tr><th>Plan</th><th>Monthly</th><th>Yearly</th><th>Trial</th><th>Active</th></tr></thead><tbody>' +
-        plans.map(p => `<tr><td>${esc(p.name)}</td><td>$${p.price_monthly}</td><td>$${p.price_yearly}</td><td>${p.trial_days}d</td><td>${p.is_active ? 'Yes' : 'No'}</td></tr>`).join('') + '</tbody>';
+      t.innerHTML = '<thead><tr><th>Plan</th><th>Monthly</th><th>Yearly</th><th>Trial</th><th>Subscribers</th></tr></thead><tbody>' +
+        plans.map(p => `<tr><td>${esc(p.name)}</td><td>$${p.price_monthly}</td><td>$${p.price_yearly}</td><td>${p.trial_days}d</td><td>${p.subscribers || 0}</td></tr>`).join('') + '</tbody>';
     }).catch(e => toastErr(e));
   }
 
-  function loadFunding(A) {
-    A.funding().then(rows => {
+  function loadFunding() {
+    NovaApi.admin.funding().then(rows => {
       const t = document.getElementById('adminFundingTable');
       t.innerHTML = '<thead><tr><th>Name</th><th>Type</th><th>Country</th><th>Ticket</th><th></th></tr></thead><tbody>' +
         rows.map(f => `<tr><td>${esc(f.name)}</td><td>${esc(f.type)}</td><td>${esc(f.country)}</td><td>${esc(f.ticket_size)}</td>
-          <td><button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delFunding(${f.id})">Delete</button></td></tr>`).join('') + '</tbody>';
+          <td><button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delFunding('${esc(String(f.id))}')">Delete</button></td></tr>`).join('') + '</tbody>';
     }).catch(e => toastErr(e));
   }
   function newFunding() {
     openCrud('Add Funding Source', [
-      { name: 'name', label: 'Funding source name', required: true },
-      { name: 'type', label: 'Type', type: 'select', options: ['accelerator', 'incubator', 'grant', 'vc', 'angel'], value: 'accelerator' },
-      { name: 'country', label: 'Country' },
+      { name: 'name',        label: 'Funding source name', required: true },
+      { name: 'type',        label: 'Type', type: 'select', options: ['accelerator', 'incubator', 'grant', 'vc', 'angel'], value: 'accelerator' },
+      { name: 'country',     label: 'Country' },
       { name: 'ticket_size', label: 'Ticket size', placeholder: 'e.g. $100K' }
     ], data => {
       if (!data.name) return;
-      NovaApi.admin.saveFunding(data).then(() => { loadFunding(NovaApi.admin); novaToast('Funding source added.'); }).catch(e => toastErr(e));
+      NovaApi.admin.saveFunding(data).then(() => { loadFunding(); novaToast('Funding source added.'); }).catch(e => toastErr(e));
     });
   }
-  function delFunding(id) { if (confirm('Delete this funding source?')) NovaApi.admin.deleteFunding(id).then(() => loadFunding(NovaApi.admin)).catch(e => toastErr(e)); }
+  function delFunding(id) { if (confirm('Delete this funding source?')) NovaApi.admin.deleteFunding(id).then(() => loadFunding()).catch(e => toastErr(e)); }
 
-  function loadVisa(A) {
-    A.visa().then(rows => {
+  function loadVisa() {
+    NovaApi.admin.visa().then(rows => {
       const t = document.getElementById('adminVisaTable');
       t.innerHTML = '<thead><tr><th>Country</th><th>Program</th><th>Fit</th><th></th></tr></thead><tbody>' +
-        rows.map(v => `<tr><td>${esc(v.country)}</td><td>${esc(v.program_name)}</td><td>${v.fit_score || '—'}</td>
-          <td><button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delVisa(${v.id})">Delete</button></td></tr>`).join('') + '</tbody>';
+        rows.map(v => `<tr><td>${esc(v.country)}</td><td>${esc(v.program_name)}</td><td>${v.fit_score != null ? v.fit_score : '—'}</td>
+          <td><button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delVisa('${esc(String(v.id))}')">Delete</button></td></tr>`).join('') + '</tbody>';
     }).catch(e => toastErr(e));
   }
   function newVisa() {
     openCrud('Add Visa Program', [
-      { name: 'country', label: 'Country', required: true },
+      { name: 'country',      label: 'Country', required: true },
       { name: 'program_name', label: 'Program name', required: true },
-      { name: 'fit_score', label: 'Fit score (0-100)', type: 'number', value: '80' }
+      { name: 'fit_score',    label: 'Fit score (0-100)', type: 'number', value: '80' }
     ], data => {
       if (!data.country || !data.program_name) return;
-      NovaApi.admin.saveVisa({ country: data.country, program_name: data.program_name, fit_score: parseInt(data.fit_score) || 80 })
-        .then(() => { loadVisa(NovaApi.admin); novaToast('Visa program added.'); }).catch(e => toastErr(e));
+      NovaApi.admin.saveVisa({
+        country: data.country,
+        program_name: data.program_name,
+        fit_score: parseInt(data.fit_score) || 80,
+        suitability_score: String(data.fit_score || 80),
+      })
+        .then(() => { loadVisa(); novaToast('Visa program added.'); }).catch(e => toastErr(e));
     });
   }
-  function delVisa(id) { if (confirm('Delete this visa program?')) NovaApi.admin.deleteVisa(id).then(() => loadVisa(NovaApi.admin)).catch(e => toastErr(e)); }
+  function delVisa(id) { if (confirm('Delete this visa program?')) NovaApi.admin.deleteVisa(id).then(() => loadVisa()).catch(e => toastErr(e)); }
 
-  function loadBlog(A) {
-    A.blog().then(rows => {
+  function loadBlog() {
+    NovaApi.admin.blog().then(rows => {
       const t = document.getElementById('adminBlogTable');
-      t.innerHTML = '<thead><tr><th>Title</th><th>Status</th><th>Author</th><th></th></tr></thead><tbody>' +
-        rows.map(b => `<tr><td>${esc(b.title)}</td><td><span class="bst ${b.status === 'published' ? 'son' : ''}">${esc(b.status)}</span></td><td>${esc(b.author?.name || '—')}</td>
-          <td class="d-flex gap-1"><button class="boc btn py-1 px-2" style="font-size:.75rem" onclick='NovaAdmin.editBlog(${JSON.stringify(b)})'>Edit</button><button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delBlog(${b.id})">Delete</button></td></tr>`).join('') + '</tbody>';
+      t.innerHTML = '<thead><tr><th>Title</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody>' +
+        rows.map(b => {
+          const safe = encodeURIComponent(JSON.stringify(b));
+          return `<tr><td>${esc(b.title)}</td><td><span class="bst ${b.status === 'published' ? 'son' : ''}">${esc(b.status)}</span></td><td style="color:var(--tx3)">${b.created_at ? new Date(b.created_at).toLocaleDateString() : '—'}</td>
+            <td class="d-flex gap-1">
+              <button class="boc btn py-1 px-2" style="font-size:.75rem" data-blog="${safe}" onclick="NovaAdmin.editBlogFromButton(this)">Edit</button>
+              <button class="boc btn py-1 px-2" style="font-size:.75rem;color:#f87171" onclick="NovaAdmin.delBlog('${esc(String(b.id))}')">Delete</button>
+            </td></tr>`;
+        }).join('') + '</tbody>';
     }).catch(e => toastErr(e));
+  }
+  function editBlogFromButton(btn) {
+    try { const b = JSON.parse(decodeURIComponent(btn.getAttribute('data-blog'))); editBlog(b); } catch (_) {}
   }
   function editBlog(b) {
     openCrud('Edit Blog Post', [
-      { name: 'title', label: 'Post title', value: b.title, required: true },
-      { name: 'excerpt', label: 'Excerpt', type: 'textarea', rows: 2, value: b.excerpt },
-      { name: 'body', label: 'Body', type: 'textarea', rows: 5, value: b.body },
-      { name: 'status', label: 'Status', type: 'select', options: ['draft', 'published', 'scheduled'], value: b.status || 'published' },
-      { name: 'publish_at', label: 'Schedule date (if scheduled)', type: 'datetime-local', value: b.publish_at }
+      { name: 'title',      label: 'Post title', value: b.title, required: true },
+      { name: 'excerpt',    label: 'Excerpt', type: 'textarea', rows: 2, value: b.excerpt || b.snippet || '' },
+      { name: 'body',       label: 'Body', type: 'textarea', rows: 5, value: b.body },
+      { name: 'status',     label: 'Status', type: 'select', options: ['draft', 'published', 'scheduled'], value: b.status || 'published' },
+      { name: 'publish_at', label: 'Schedule date (if scheduled)', type: 'datetime-local', value: b.publish_at || b.scheduled_at },
     ], data => {
-      NovaApi.admin.saveBlog(Object.assign({ id: b.id }, data)).then(() => { loadBlog(NovaApi.admin); novaToast('Post updated.'); }).catch(e => toastErr(e));
+      const payload = { id: b.id, title: data.title, excerpt: data.excerpt, body: data.body, status: data.status };
+      if (data.publish_at) payload.publish_at = new Date(data.publish_at).toISOString();
+      NovaApi.admin.saveBlog(payload).then(() => { loadBlog(); novaToast('Post updated.'); }).catch(e => toastErr(e));
     });
   }
   function newBlog() {
     openCrud('New Blog Post', [
-      { name: 'title', label: 'Post title', required: true },
-      { name: 'excerpt', label: 'Excerpt', type: 'textarea', rows: 2 },
-      { name: 'body', label: 'Body', type: 'textarea', rows: 5 },
-      { name: 'status', label: 'Status', type: 'select', options: ['draft', 'published', 'scheduled'], value: 'published' },
-      { name: 'publish_at', label: 'Schedule date (if scheduled)', type: 'datetime-local' }
+      { name: 'title',      label: 'Post title', required: true },
+      { name: 'excerpt',    label: 'Excerpt', type: 'textarea', rows: 2 },
+      { name: 'body',       label: 'Body', type: 'textarea', rows: 5 },
+      { name: 'status',     label: 'Status', type: 'select', options: ['draft', 'published', 'scheduled'], value: 'published' },
+      { name: 'publish_at', label: 'Schedule date (if scheduled)', type: 'datetime-local' },
     ], data => {
       if (!data.title) return;
-      NovaApi.admin.saveBlog(data).then(() => { loadBlog(NovaApi.admin); novaToast('Post saved.'); }).catch(e => toastErr(e));
+      const payload = { title: data.title, excerpt: data.excerpt, body: data.body, status: data.status };
+      if (data.publish_at) payload.publish_at = new Date(data.publish_at).toISOString();
+      NovaApi.admin.saveBlog(payload).then(() => { loadBlog(); novaToast('Post saved.'); }).catch(e => toastErr(e));
     });
   }
-  function delBlog(id) { if (confirm('Delete this post?')) NovaApi.admin.deleteBlog(id).then(() => loadBlog(NovaApi.admin)).catch(e => toastErr(e)); }
+  function delBlog(id) { if (confirm('Delete this post?')) NovaApi.admin.deleteBlog(id).then(() => loadBlog()).catch(e => toastErr(e)); }
 
-  function loadCms(A) {
-    fetch(NovaApi.base + '/cms').then(r => r.json()).then(({ data }) => {
-      const host = document.getElementById('adminCms');
-      host.innerHTML = Object.keys(data).map(section =>
-        `<div class="nova-panel mb-3"><div class="d-flex justify-content-between align-items-center mb-2"><h6 class="mb-0" style="text-transform:capitalize">${section}</h6>
-          <button class="bgrd btn py-1 px-3" style="font-size:.78rem" onclick="NovaAdmin.saveCms('${section}')">Save</button></div>
-          <textarea class="ninp" id="cms-${section}" rows="4">${esc(JSON.stringify(data[section], null, 2))}</textarea></div>`).join('');
-    }).catch(e => toastErr(e));
+  function loadCms() {
+    // CMS is not yet backed by a server table — show informational state.
+    const host = document.getElementById('adminCms');
+    if (host) host.innerHTML =
+      '<div class="nova-panel"><div style="color:var(--tx2);font-size:.9rem">' +
+      '<i class="fa-solid fa-circle-info me-2" style="color:var(--pur)"></i>' +
+      'CMS for landing-page content is not yet enabled in this deployment. ' +
+      'Edit copy directly in <code>index.html</code>, or open a ticket with engineering to schedule the CMS rollout.' +
+      '</div></div>';
   }
-  function saveCms(section) {
-    let value;
-    try { value = JSON.parse(document.getElementById('cms-' + section).value); }
-    catch (e) { return novaToast('Invalid JSON for ' + section); }
-    NovaApi.admin.cms(section, value).then(() => novaToast(section + ' updated.')).catch(e => toastErr(e));
-  }
+  function saveCms() { /* CMS not yet enabled */ }
 
   /* ---- Support Tickets (Supabase: `support_tickets`) ---- */
   let ticketFilter = 'all';
   let ticketCache = [];
   let activeTicket = null;
-  const DEMO_TICKETS = [
-    { id: 'TK-1042', user_name: 'Lina Park', user_email: 'lina@flowhealth.io', subject: 'Cannot export pitch deck to PPTX', status: 'open', created_at: '2026-06-05', messages: [{ role: 'user', content: 'When I click Export PPTX nothing downloads. Using Chrome on Mac.', at: '2026-06-05' }] },
-    { id: 'TK-1041', user_name: 'Omar Benali', user_email: 'omar@dabba.co', subject: 'Billing — upgrade to Startup plan', status: 'open', created_at: '2026-06-04', messages: [{ role: 'user', content: 'I want to add 3 team seats. How do I upgrade and will I be prorated?', at: '2026-06-04' }] },
-    { id: 'TK-1038', user_name: 'Sara Müller', user_email: 'sara@gridsense.eu', subject: 'Readiness score seems stuck', status: 'closed', created_at: '2026-06-01', messages: [{ role: 'user', content: 'My readiness score did not change after editing my plan.', at: '2026-06-01' }] },
-    { id: 'TK-1035', user_name: 'Alex Founder', user_email: 'alex@gmail.com', subject: 'Feature request: French translation', status: 'closed', created_at: '2026-05-28', messages: [{ role: 'user', content: 'Would love a French UI for my co-founder.', at: '2026-05-28' }] }
-  ];
   // Normalize a Supabase ticket row to the shape the renderer/modal use.
   function normTicket(r) {
     let messages = r.messages;
@@ -354,11 +373,10 @@
       messages,
     };
   }
-  function loadSupport(A) {
-    const done = rows => { ticketCache = (rows || []).map(normTicket); paintTickets(); };
-    if (global.NovaApi && NovaApi.adminGetTickets) {
-      NovaApi.adminGetTickets().then(done).catch(() => done(DEMO_TICKETS));
-    } else { done(DEMO_TICKETS); }
+  function loadSupport() {
+    NovaApi.adminGetTickets()
+      .then(rows => { ticketCache = (rows || []).map(normTicket); paintTickets(); })
+      .catch(e => { ticketCache = []; paintTickets(); toastErr(e); });
   }
   function filterTickets(f, btn) {
     ticketFilter = f;
@@ -407,43 +425,34 @@
     const close = document.getElementById('ticketCloseOnReply').checked;
     const messages = (activeTicket.messages || []).concat([{ role: 'admin', content: reply, at: new Date().toISOString() }]);
     const status = close ? 'closed' : 'open';
-    const finish = () => {
-      activeTicket.messages = messages; activeTicket.status = status;
-      bootstrap.Modal.getOrCreateInstance(document.getElementById('ticketModal')).hide();
-      paintTickets();
-      novaToast('Reply sent to ' + activeTicket.user + (close ? ' · ticket closed.' : '.'));
-    };
-    if (global.NovaApi && NovaApi.adminReplyToTicket && activeTicket.id) {
-      NovaApi.adminReplyToTicket(activeTicket.id, messages, status).then(finish).catch(e => toastErr(e));
-    } else { finish(); }
+    NovaApi.adminReplyToTicket(activeTicket.id, messages, status)
+      .then(() => {
+        activeTicket.messages = messages; activeTicket.status = status;
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('ticketModal')).hide();
+        paintTickets();
+        novaToast('Reply sent to ' + activeTicket.user + (close ? ' · ticket closed.' : '.'));
+      })
+      .catch(e => toastErr(e));
   }
 
-  function loadAudit(A) {
-    const paint = rows => {
-      const t = document.getElementById('adminAuditTable');
-      if (!t) return;
-      t.innerHTML = '<thead><tr><th>When</th><th>User</th><th>Action</th><th>IP</th></tr></thead><tbody>' +
-        (rows || []).map(l => `<tr><td>${l.created_at ? new Date(l.created_at).toLocaleString() : '—'}</td><td>${esc((l.user && l.user.name) || l.user_name || 'system')}</td><td>${esc(l.action)}</td><td>${esc(l.ip_address || '—')}</td></tr>`).join('') + '</tbody>';
-    };
-    if (global.NovaApi && NovaApi.adminGetAuditLogs) {
-      NovaApi.adminGetAuditLogs().then(paint).catch(() => paint([{ created_at: new Date().toISOString(), user: { name: 'system' }, action: 'System Ready — Monitoring Active', ip_address: '—' }]));
-      return;
-    }
-    A.auditLogs().then(paint).catch(e => toastErr(e));
+  function loadAudit() {
+    NovaApi.adminGetAuditLogs().then(paintAudit).catch(e => { paintAudit([]); toastErr(e); });
+  }
+  function paintAudit(rows) {
+    const t = document.getElementById('adminAuditTable');
+    if (!t) return;
+    t.innerHTML = '<thead><tr><th>When</th><th>User</th><th>Action</th><th>Resource</th><th>IP</th></tr></thead><tbody>' +
+      ((rows || []).length
+        ? rows.map(l => `<tr><td>${l.created_at ? new Date(l.created_at).toLocaleString() : '—'}</td><td>${esc(l.user_name || (l.user && l.user.name) || 'system')}</td><td>${esc(l.action)}</td><td>${esc((l.resource ? l.resource : '') + (l.resource_id ? ('#' + l.resource_id) : ''))}</td><td>${esc(l.ip_address || '—')}</td></tr>`).join('')
+        : '<tr><td colspan="5" style="text-align:center;color:var(--tx3);padding:24px">No audit events yet.</td></tr>') + '</tbody>';
   }
 
   /* ---- Super admin ---- */
   const AI_PROVIDERS = ['openrouter', 'openai', 'anthropic', 'gemini', 'deepseek'];
-  let aiConfigCache = [];
-  function loadAi(A) {
-    // Prefer the Supabase `ai_providers_config` table; fall back to legacy settings.
-    if (global.NovaApi && NovaApi.superAdminGetAIConfig) {
-      NovaApi.superAdminGetAIConfig()
-        .then(rows => { aiConfigCache = rows || []; paintAi(rowsToSettings(rows)); })
-        .catch(() => A.aiSettings().then(paintAi).catch(e => toastErr(e)));
-      return;
-    }
-    A.aiSettings().then(paintAi).catch(e => toastErr(e));
+  function loadAi() {
+    NovaApi.superAdminGetAIConfig()
+      .then(rows => paintAi(rowsToSettings(rows)))
+      .catch(e => toastErr(e));
   }
   // Convert ai_providers_config rows into the { provider, model, costs, configured } shape.
   function rowsToSettings(rows) {
@@ -473,7 +482,7 @@
             <label class="nova-switch"><input type="checkbox" id="en-${p}" ${configured ? 'checked' : ''}><span></span></label>
           </div>
           <div class="row g-2">
-            <div class="col-md-6"><label class="nlbl">${p} API key</label><input class="ninp" type="password" id="key-${p}" placeholder="leave blank to keep"></div>
+            <div class="col-md-6"><label class="nlbl">${p} key (server)</label><input class="ninp" type="text" disabled placeholder="Set ${p.toUpperCase()}_API_KEY in Vercel env"></div>
             <div class="col-md-2"><label class="nlbl">Priority</label><input class="ninp" type="number" id="prio-${p}" value="${c.priority != null ? c.priority : ''}" placeholder="1"></div>
             <div class="col-md-2"><label class="nlbl">In $/1K</label><input class="ninp" type="number" step="0.0001" id="cin-${p}" value="${c.input != null ? c.input : ''}" placeholder="0.0005"></div>
             <div class="col-md-2"><label class="nlbl">Out $/1K</label><input class="ninp" type="number" step="0.0001" id="cout-${p}" value="${c.output != null ? c.output : ''}" placeholder="0.0015"></div>
@@ -485,6 +494,7 @@
           <div class="col-md-6"><label class="nlbl">Default Provider</label><select class="ninp" id="aiProv">${provOpts}</select></div>
           <div class="col-md-6"><label class="nlbl">Default Model</label><input class="ninp" id="aiModel" value="${esc(s.model)}"></div>
         </div>
+        <div class="mt-2" style="font-size:.78rem;color:var(--tx3)"><i class="fa-solid fa-shield-halved me-1"></i>Provider API keys are stored as environment variables on the server. You toggle providers here; you set keys in your Vercel project settings.</div>
       </div>
       <h6 class="mb-2"><i class="fa-solid fa-microchip me-2" style="color:var(--pur)"></i>Providers, Costs &amp; Priority</h6>
       ${AI_PROVIDERS.map(provRow).join('')}
@@ -494,89 +504,79 @@
   }
   function saveAi() {
     const defaultProvider = document.getElementById('aiProv').value;
-    const defaultModel = document.getElementById('aiModel').value;
-    // Supabase mode: update each provider row in ai_providers_config.
-    if (global.NovaApi && NovaApi.superAdminUpdateAIConfig) {
-      const ops = AI_PROVIDERS.map(p => {
-        const prio = document.getElementById('prio-' + p), cin = document.getElementById('cin-' + p), cout = document.getElementById('cout-' + p);
-        const en = document.getElementById('en-' + p), key = document.getElementById('key-' + p);
-        const fields = {
-          enabled: !!(en && en.checked),
-          priority: prio && prio.value !== '' ? parseInt(prio.value) : null,
-          input_cost_per_1k: cin && cin.value !== '' ? parseFloat(cin.value) : null,
-          output_cost_per_1k: cout && cout.value !== '' ? parseFloat(cout.value) : null,
-          is_default: p === defaultProvider,
-          default_model: p === defaultProvider ? defaultModel : undefined,
-        };
-        if (key && key.value.trim()) fields.api_key = key.value.trim();
-        // Strip undefined keys so we don't overwrite columns unintentionally.
-        Object.keys(fields).forEach(k => fields[k] === undefined && delete fields[k]);
-        return NovaApi.superAdminUpdateAIConfig(p, fields);
-      });
-      Promise.all(ops).then(() => { novaToast('AI provider config saved.'); loadAi(NovaApi.admin); }).catch(e => toastErr(e));
-      return;
-    }
-    // Legacy fallback.
-    const keys = {}, costs = {}, enabled = {};
-    AI_PROVIDERS.forEach(p => {
-      const v = document.getElementById('key-' + p); if (v && v.value.trim()) keys[p] = v.value.trim();
-      const prio = document.getElementById('prio-' + p), cin = document.getElementById('cin-' + p), cout = document.getElementById('cout-' + p);
-      costs[p] = { priority: prio && prio.value !== '' ? parseInt(prio.value) : null, input: cin && cin.value !== '' ? parseFloat(cin.value) : null, output: cout && cout.value !== '' ? parseFloat(cout.value) : null };
-      const en = document.getElementById('en-' + p); enabled[p] = !!(en && en.checked);
+    const defaultModel    = document.getElementById('aiModel').value;
+    const ops = AI_PROVIDERS.map(p => {
+      const prio = document.getElementById('prio-' + p);
+      const cin  = document.getElementById('cin-' + p);
+      const cout = document.getElementById('cout-' + p);
+      const en   = document.getElementById('en-' + p);
+      const fields = {
+        enabled: !!(en && en.checked),
+        priority: prio && prio.value !== '' ? parseInt(prio.value) : null,
+        input_cost_per_1k:  cin  && cin.value  !== '' ? parseFloat(cin.value)  : null,
+        output_cost_per_1k: cout && cout.value !== '' ? parseFloat(cout.value) : null,
+        is_default: p === defaultProvider,
+      };
+      if (p === defaultProvider) fields.default_model = defaultModel;
+      return NovaApi.superAdminUpdateAIConfig(p, fields);
     });
-    NovaApi.admin.saveAiSettings({ provider: defaultProvider, model: defaultModel, keys, costs, enabled })
-      .then(() => novaToast('AI settings saved.')).catch(e => toastErr(e));
+    Promise.all(ops)
+      .then(() => { novaToast('AI provider config saved.'); loadAi(); })
+      .catch(e => toastErr(e));
   }
-  function testAi() {
-    document.getElementById('aiTestOut').innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing…';
-    NovaApi.admin.testAi(document.getElementById('aiProv').value)
-      .then(r => document.getElementById('aiTestOut').innerHTML = '<span style="color:#34d399"><i class="fa-solid fa-circle-check me-1"></i>' + esc(r.reply || 'OK') + '</span>')
-      .catch(e => document.getElementById('aiTestOut').innerHTML = '<span style="color:#f87171">' + esc(e.message) + '</span>');
+  async function testAi() {
+    const out = document.getElementById('aiTestOut');
+    out.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Testing…';
+    try {
+      const reply = await NovaAI.chat([{ role: 'user', content: 'Reply with exactly: Nova online.' }], {});
+      out.innerHTML = '<span style="color:#34d399"><i class="fa-solid fa-circle-check me-1"></i>' + esc((reply || '').slice(0, 80)) + '</span>';
+    } catch (e) {
+      out.innerHTML = '<span style="color:#f87171">' + esc(e.message || 'Test failed.') + '</span>';
+    }
   }
-  function loadEmail(A) {
-    A.emailSettings().then(s => {
-      document.getElementById('superEmail').innerHTML = `<div class="nova-panel">
-        <div style="font-size:.85rem;color:var(--tx2)">Mailer: <strong>${esc(s.mailer)}</strong> · From: ${esc(s.from?.address || '—')} · Resend: ${s.resend_configured ? 'yes' : 'no'}</div>
-        <hr style="border-color:var(--bd)">
-        <label class="nlbl">Send test email to</label>
-        <div class="d-flex gap-2"><input class="ninp mb-0" id="testEmailTo" placeholder="you@example.com" style="max-width:300px">
-        <button class="bgrd btn py-2 px-3" onclick="NovaAdmin.testEmail()">Send</button></div>
-        <div id="emailTestOut" style="font-size:.82rem;margin-top:10px"></div></div>`;
-    }).catch(e => toastErr(e));
+  function loadEmail() {
+    const host = document.getElementById('superEmail');
+    if (!host) return;
+    host.innerHTML =
+      '<div class="nova-panel"><div style="color:var(--tx2);font-size:.9rem">' +
+      '<i class="fa-solid fa-envelope-circle-check me-2" style="color:var(--pur)"></i>' +
+      'Email is delivered through Supabase Auth\'s built-in mailer. To customize subject/body or wire a third-party provider (Resend / SendGrid), configure it in Supabase Dashboard → Authentication → Emails. ' +
+      'A self-service editor will land here in a future release.</div></div>';
   }
-  function testEmail() {
-    const to = document.getElementById('testEmailTo').value.trim();
-    if (!to) return;
-    document.getElementById('emailTestOut').innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Sending…';
-    NovaApi.admin.testEmail(to)
-      .then(r => document.getElementById('emailTestOut').innerHTML = '<span style="color:#34d399">' + esc(r.message) + '</span>')
-      .catch(e => document.getElementById('emailTestOut').innerHTML = '<span style="color:#f87171">' + esc(e.message) + '</span>');
-  }
+  function testEmail() { /* not enabled yet */ }
   /* ---- Payment Gateways ---- */
-  function loadGateways(A) {
+  function loadGateways() {
     const host = document.getElementById('superGateways');
     if (!host) return;
+    NovaApi.superAdminGetGateways().then(rows => {
+      const cur = {};
+      (rows || []).forEach(r => { cur[r.provider] = r; });
+      host.innerHTML = renderGatewayForm(cur);
+    }).catch(() => { host.innerHTML = renderGatewayForm({}); });
+  }
+  function renderGatewayForm(cur) {
+    const stripe = cur.stripe || {};
+    const paypal = cur.paypal || {};
+    const valFor = v => esc(v == null ? '' : String(v));
     const gw = (title, icon, color, fields) => `<div class="nova-panel mb-3">
       <div class="d-flex align-items-center justify-content-between mb-3">
         <h6 class="mb-0"><i class="fa-brands ${icon} me-2" style="color:${color}"></i>${title}</h6>
-        <label class="d-flex align-items-center gap-2" style="font-size:.8rem;color:var(--tx2)">Sandbox<label class="nova-switch mb-0"><input type="checkbox" id="gw-${title.toLowerCase()}-live"><span></span></label>Live</label>
+        <label class="d-flex align-items-center gap-2" style="font-size:.8rem;color:var(--tx2)">Sandbox<label class="nova-switch mb-0"><input type="checkbox" id="gw-${title.toLowerCase()}-live" ${(title === 'Stripe' ? stripe.live : paypal.live) ? 'checked' : ''}><span></span></label>Live</label>
       </div>
-      <div class="row g-3">${fields.map(f => `<div class="col-md-6"><label class="nlbl">${f.label}</label><input class="ninp" type="${f.type || 'text'}" id="${f.id}" placeholder="${f.ph || ''}"></div>`).join('')}</div>
+      <div class="row g-3">${fields.map(f => `<div class="col-md-6"><label class="nlbl">${f.label}</label><input class="ninp" type="${f.type || 'text'}" id="${f.id}" value="${valFor(f.value)}" placeholder="${esc(f.ph || '')}" autocomplete="off"></div>`).join('')}</div>
       <button class="bgrd btn py-2 px-4 mt-3" onclick="NovaAdmin.saveGateway('${title}')"><i class="fa-solid fa-floppy-disk me-1"></i>Save ${title}</button>
     </div>`;
-    host.innerHTML =
-      gw('Stripe', 'fa-stripe-s', '#635bff', [
-        { label: 'Publishable API Key', id: 'stripe-pk', ph: 'pk_live_...' },
-        { label: 'Secret Key', id: 'stripe-sk', type: 'password', ph: 'sk_live_...' },
-        { label: 'Webhook Endpoint', id: 'stripe-wh', ph: 'https://api.nova.ai/webhooks/stripe' },
-        { label: 'Webhook Signing Secret', id: 'stripe-whsec', type: 'password', ph: 'whsec_...' }
-      ]) +
-      gw('PayPal', 'fa-paypal', '#00457c', [
-        { label: 'Client ID', id: 'paypal-id', ph: 'Axx...' },
-        { label: 'Client Secret', id: 'paypal-secret', type: 'password', ph: 'ELx...' },
-        { label: 'Webhook Endpoint', id: 'paypal-wh', ph: 'https://api.nova.ai/webhooks/paypal' },
-        { label: 'Webhook ID', id: 'paypal-whid', ph: 'WH-...' }
-      ]);
+    return gw('Stripe', 'fa-stripe-s', '#635bff', [
+      { label: 'Publishable Key',     id: 'stripe-pk',    value: stripe.publishable_key, ph: 'pk_live_...' },
+      { label: 'Secret Key',          id: 'stripe-sk',    value: stripe.secret_key,      ph: 'sk_live_... (server only)', type: 'password' },
+      { label: 'Webhook Endpoint',    id: 'stripe-wh',    value: stripe.webhook_url,     ph: 'https://your-domain/api/stripe-webhook' },
+      { label: 'Webhook Signing Secret', id: 'stripe-whsec', value: stripe.webhook_secret, ph: 'whsec_...', type: 'password' },
+    ]) + gw('PayPal', 'fa-paypal', '#00457c', [
+      { label: 'Client ID',     id: 'paypal-id',     value: paypal.client_id,     ph: 'Axx...' },
+      { label: 'Client Secret', id: 'paypal-secret', value: paypal.client_secret, ph: 'ELx...', type: 'password' },
+      { label: 'Webhook URL',   id: 'paypal-wh',     value: paypal.webhook_url,   ph: 'https://your-domain/api/paypal-webhook' },
+      { label: 'Webhook ID',    id: 'paypal-whid',   value: paypal.webhook_id,    ph: 'WH-...' },
+    ]);
   }
   function saveGateway(name) {
     const key = name.toLowerCase();
@@ -584,22 +584,32 @@
     const liveEl = document.getElementById('gw-' + key + '-live');
     let payload;
     if (key === 'stripe') {
-      payload = { provider: 'stripe', publishable_key: get('stripe-pk'), secret_key: get('stripe-sk'), webhook_url: get('stripe-wh'), webhook_secret: get('stripe-whsec'), live: !!(liveEl && liveEl.checked) };
+      payload = {
+        provider: 'stripe',
+        publishable_key: get('stripe-pk'),
+        secret_key:      get('stripe-sk'),
+        webhook_url:     get('stripe-wh'),
+        webhook_secret:  get('stripe-whsec'),
+        live: !!(liveEl && liveEl.checked),
+      };
     } else {
-      payload = { provider: 'paypal', client_id: get('paypal-id'), client_secret: get('paypal-secret'), webhook_url: get('paypal-wh'), webhook_id: get('paypal-whid'), live: !!(liveEl && liveEl.checked) };
+      payload = {
+        provider: 'paypal',
+        client_id:     get('paypal-id'),
+        client_secret: get('paypal-secret'),
+        webhook_url:   get('paypal-wh'),
+        webhook_id:    get('paypal-whid'),
+        live: !!(liveEl && liveEl.checked),
+      };
     }
-    // Persist when a payment-gateway endpoint exists; otherwise acknowledge (UI only).
-    if (global.NovaApi && NovaApi.superAdminSaveGateway) {
-      NovaApi.superAdminSaveGateway(payload).then(() => novaToast(name + ' gateway saved.')).catch(e => toastErr(e));
-    } else {
-      novaToast(name + ' gateway settings captured (' + (payload.live ? 'Live' : 'Sandbox') + ').');
-    }
+    NovaApi.superAdminSaveGateway(payload)
+      .then(() => novaToast(name + ' gateway saved.'))
+      .catch(e => toastErr(e));
   }
 
   /* ---- Security & Controls ---- */
-  // Each entry: { id, ip_address, reason, created_at }. Falls back to demo seeds.
   let blockedIps = [];
-  function loadSecurity(A) {
+  function loadSecurity() {
     const host = document.getElementById('superSecurity');
     if (!host) return;
     host.innerHTML = `
@@ -614,32 +624,19 @@
       </div>
       <div class="nova-panel">
         <h6 class="mb-3"><i class="fa-solid fa-gauge-high me-2" style="color:var(--pur)"></i>Rate Limiting</h6>
-        <p style="font-size:.8rem;color:var(--tx3);margin-bottom:14px">Configure maximum API requests allowed per role.</p>
+        <p style="font-size:.8rem;color:var(--tx3);margin-bottom:14px">The AI streaming endpoint enforces a daily per-user quota set by the <code>AI_DAILY_LIMIT</code> environment variable on the server. Update it in your Vercel project settings.</p>
         <div class="row g-3">
           <div class="col-md-6">
-            <div style="font-weight:600;font-size:.85rem;margin-bottom:6px">Free Plan</div>
-            <label class="nlbl">Max requests / minute</label><input class="ninp" type="number" id="rlFreeMin" value="20">
-            <label class="nlbl">Max requests / hour</label><input class="ninp" type="number" id="rlFreeHour" value="300">
+            <div style="font-weight:600;font-size:.85rem;margin-bottom:6px">AI Daily Limit (per user)</div>
+            <label class="nlbl">Current value</label><input class="ninp" type="text" id="rlAiDaily" disabled placeholder="Set AI_DAILY_LIMIT in Vercel">
           </div>
           <div class="col-md-6">
-            <div style="font-weight:600;font-size:.85rem;margin-bottom:6px">Pro Plan</div>
-            <label class="nlbl">Max requests / minute</label><input class="ninp" type="number" id="rlProMin" value="120">
-            <label class="nlbl">Max requests / hour</label><input class="ninp" type="number" id="rlProHour" value="5000">
+            <div style="font-weight:600;font-size:.85rem;margin-bottom:6px">Max prompt tokens</div>
+            <label class="nlbl">Current value</label><input class="ninp" type="text" id="rlAiMaxTokens" disabled placeholder="Set AI_MAX_TOKENS in Vercel">
           </div>
         </div>
-        <button class="bgrd btn py-2 px-4 mt-3" onclick="NovaAdmin.saveRateLimits()"><i class="fa-solid fa-floppy-disk me-1"></i>Save Rate Limits</button>
       </div>`;
-    // Load blocked IPs from Supabase (fallback to demo seeds).
-    if (global.NovaApi && NovaApi.superAdminGetBlockedIPs) {
-      NovaApi.superAdminGetBlockedIPs().then(rows => { blockedIps = rows || []; paintBlockedIps(); })
-        .catch(() => { blockedIps = demoIps(); paintBlockedIps(); });
-    } else { blockedIps = demoIps(); paintBlockedIps(); }
-  }
-  function demoIps() {
-    return [
-      { id: 'demo-1', ip_address: '192.0.2.44', reason: 'Brute force', created_at: new Date().toISOString() },
-      { id: 'demo-2', ip_address: '198.51.100.23', reason: 'Spam', created_at: new Date().toISOString() }
-    ];
+    NovaApi.superAdminGetBlockedIPs().then(rows => { blockedIps = rows || []; paintBlockedIps(); }).catch(e => { blockedIps = []; paintBlockedIps(); toastErr(e); });
   }
   function paintBlockedIps() {
     const t = document.getElementById('blockedIpTable');
@@ -647,7 +644,7 @@
     t.innerHTML = '<thead><tr><th>IP Address</th><th>Reason</th><th>Blocked</th><th></th></tr></thead><tbody>' +
       (blockedIps.length ? blockedIps.map(r => `<tr><td><code>${esc(r.ip_address)}</code></td><td style="color:var(--tx2)">${esc(r.reason || '—')}</td>
         <td style="color:var(--tx3)">${r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Active'}</td>
-        <td><button class="boc btn py-1 px-2" style="font-size:.75rem;color:#34d399" onclick="NovaAdmin.unblockIp('${esc(r.id)}')">Unblock</button></td></tr>`).join('')
+        <td><button class="boc btn py-1 px-2" style="font-size:.75rem;color:#34d399" onclick="NovaAdmin.unblockIp('${esc(String(r.id))}')">Unblock</button></td></tr>`).join('')
         : '<tr><td colspan="4" style="text-align:center;color:var(--tx3);padding:20px">No blocked IPs.</td></tr>') + '</tbody>';
   }
   function addBlockedIp() {
@@ -656,78 +653,66 @@
     const ip = inp.value.trim();
     const reason = reasonEl ? reasonEl.value.trim() : '';
     if (!ip) return;
-    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) return novaToast('Enter a valid IPv4 address.');
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip) && !/^[\da-fA-F:]+$/.test(ip)) return novaToast('Enter a valid IP address.');
     if (blockedIps.some(r => r.ip_address === ip)) return novaToast('IP already blocked.');
-    if (global.NovaApi && NovaApi.superAdminBlockIP) {
-      NovaApi.superAdminBlockIP(ip, reason).then(row => {
-        blockedIps.unshift(row); inp.value = ''; if (reasonEl) reasonEl.value = '';
-        paintBlockedIps(); novaToast('IP added to blocklist.');
-      }).catch(e => toastErr(e));
-      return;
-    }
-    blockedIps.unshift({ id: 'local-' + Date.now(), ip_address: ip, reason, created_at: new Date().toISOString() });
-    inp.value = ''; if (reasonEl) reasonEl.value = '';
-    paintBlockedIps(); novaToast('IP added to blocklist.');
+    NovaApi.superAdminBlockIP(ip, reason).then(row => {
+      blockedIps.unshift(row); inp.value = ''; if (reasonEl) reasonEl.value = '';
+      paintBlockedIps(); novaToast('IP added to blocklist.');
+    }).catch(e => toastErr(e));
   }
   function unblockIp(id) {
-    const finish = () => { blockedIps = blockedIps.filter(r => String(r.id) !== String(id)); paintBlockedIps(); novaToast('IP unblocked.'); };
-    if (global.NovaApi && NovaApi.superAdminUnblockIP && String(id).indexOf('local-') !== 0 && String(id).indexOf('demo-') !== 0) {
-      NovaApi.superAdminUnblockIP(id).then(finish).catch(e => toastErr(e));
-    } else { finish(); }
+    NovaApi.superAdminUnblockIP(id).then(() => {
+      blockedIps = blockedIps.filter(r => String(r.id) !== String(id));
+      paintBlockedIps(); novaToast('IP unblocked.');
+    }).catch(e => toastErr(e));
   }
-  function saveRateLimits() {
-    const limits = {
-      free: { per_minute: parseInt(val('rlFreeMin')) || 0, per_hour: parseInt(val('rlFreeHour')) || 0 },
-      pro: { per_minute: parseInt(val('rlProMin')) || 0, per_hour: parseInt(val('rlProHour')) || 0 },
-    };
-    function val(id) { const e = document.getElementById(id); return e ? e.value : ''; }
-    novaToast('Rate limits saved (' + limits.free.per_minute + '/min Free · ' + limits.pro.per_minute + '/min Pro).');
-  }
+  function saveRateLimits() { /* server-managed via env vars */ }
 
-  function loadSystem(A) {
+  function loadSystem() {
     const apply = d => {
       document.getElementById('superSystem').innerHTML =
         card(d.users, 'Users', '#a78bfa') + card(d.startups, 'Startups', '#60a5fa') +
-        card(d.ai_tokens || 0, 'AI Tokens Used', '#34d399') + card(d.active_subscriptions, 'Active Subs', '#fbbf24');
-      drawMonitors();
+        card(d.ai_requests || 0, 'AI Requests (24h)', '#34d399') + card(d.active_subscriptions, 'Active Subs', '#fbbf24');
     };
-    if (global.NovaApi && NovaApi.adminGetStats) {
-      NovaApi.adminGetStats().then(apply).catch(() => A.dashboard().then(apply).catch(e => { toastErr(e); apply({}); }));
-      return;
-    }
-    A.dashboard().then(apply).catch(e => { toastErr(e); apply({}); });
+    Promise.all([NovaApi.adminGetStats(), aiRequestsLast24h()])
+      .then(([stats, ai]) => apply(Object.assign({}, stats, { ai_requests: ai })))
+      .catch(e => { toastErr(e); apply({}); });
+    // Health probes (real).
+    NovaApi.systemHealth().then(h => drawHealthMonitors(h.probes || [])).catch(() => drawHealthMonitors([]));
+  }
+  async function aiRequestsLast24h() {
+    try {
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const { count } = await NovaApi.supabase.from('ai_requests')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', since);
+      return count || 0;
+    } catch (_) { return 0; }
   }
   const monitorCharts = {};
-  function drawMonitors() {
+  function drawHealthMonitors(probes) {
     const host = document.getElementById('superMonitors');
-    if (!host || !global.Chart) return;
-    const monitors = [
-      { id: 'monDb', label: 'Database', color: '#a78bfa', unit: 'ms' },
-      { id: 'monAi', label: 'AI Providers', color: '#34d399', unit: 'ms' },
-      { id: 'monEmail', label: 'Email Gateway', color: '#fbbf24', unit: 'ms' },
-      { id: 'monStorage', label: 'Storage', color: '#60a5fa', unit: '%' }
-    ];
-    host.innerHTML = monitors.map(m => `
-      <div class="col-6 col-xl-3">
-        <div class="db-stat-card">
-          <div class="d-flex align-items-center justify-content-between mb-2">
-            <span style="font-size:.8rem;font-weight:600">${m.label}</span>
-            <span class="bst son" style="font-size:.66rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34d399;margin-right:4px"></span>Operational</span>
+    if (!host) return;
+    if (!probes.length) {
+      host.innerHTML = '<div class="col-12" style="color:var(--tx3);font-size:.82rem">Health probes unavailable.</div>';
+      return;
+    }
+    const COLORS = { database: '#a78bfa', ai: '#34d399', storage: '#60a5fa', stripe: '#fbbf24' };
+    const STATUS_COLOR = { ok: '#34d399', degraded: '#fbbf24', down: '#f87171' };
+    host.innerHTML = probes.map(p => {
+      const c = STATUS_COLOR[p.status] || '#6b6b8a';
+      return `
+        <div class="col-6 col-xl-3">
+          <div class="db-stat-card">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+              <span style="font-size:.8rem;font-weight:600;text-transform:capitalize">${esc(p.source)}</span>
+              <span class="bst" style="background:${c}22;color:${c};font-size:.66rem"><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${c};margin-right:4px"></span>${esc(p.status)}</span>
+            </div>
+            <div style="font-size:1.6rem;font-weight:700;color:${COLORS[p.source] || '#a78bfa'}">${esc(String(p.latency_ms))}<span style="font-size:.7rem;color:var(--tx3);margin-left:4px">ms</span></div>
+            <div style="font-size:.7rem;color:var(--tx3)">Latest probe</div>
           </div>
-          <canvas id="${m.id}" height="60"></canvas>
-        </div>
-      </div>`).join('');
-    monitors.forEach(m => {
-      const ctx = document.getElementById(m.id);
-      if (!ctx) return;
-      if (monitorCharts[m.id]) monitorCharts[m.id].destroy();
-      const data = Array.from({ length: 16 }, () => 30 + Math.round(Math.random() * 60));
-      monitorCharts[m.id] = new Chart(ctx, {
-        type: 'line',
-        data: { labels: data.map((_, i) => i), datasets: [{ data, borderColor: m.color, backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, tension: .4 }] },
-        options: { responsive: true, plugins: { legend: { display: false }, tooltip: { enabled: false } }, scales: { x: { display: false }, y: { display: false, min: 0, max: 100 } }, animation: false }
-      });
-    });
+        </div>`;
+    }).join('');
   }
 
   function toastErr(e) {
@@ -737,11 +722,16 @@
 
   global.NovaAdmin = {
     applyRole, load,
-    searchUsers, toggleUser, editUser, delUser, newFunding, delFunding, newVisa, delVisa,
-    newBlog, editBlog, delBlog, saveCms, saveAi, testAi, testEmail,
+    searchUsers, toggleUser, editUser, editUserFromButton, delUser,
+    newFunding, delFunding,
+    newVisa, delVisa,
+    newBlog, editBlog, editBlogFromButton, delBlog,
+    saveCms,
+    saveAi, testAi, testEmail,
     submitCrud,
     filterTickets, openTicket, sendTicketReply,
-    saveGateway, addBlockedIp, unblockIp, saveRateLimits,
+    saveGateway,
+    addBlockedIp, unblockIp, saveRateLimits,
     isAdmin: () => role.admin, isSuperAdmin: () => role.superAdmin,
   };
 })(window);
