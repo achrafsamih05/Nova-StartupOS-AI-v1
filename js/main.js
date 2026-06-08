@@ -564,12 +564,14 @@ async function generateDeck() {
   document.getElementById('pdEmpty').style.display = 'none';
   if (wrap) {
     wrap.style.display = 'grid';
+    const loadTitle = (window.NovaI18n ? NovaI18n.t('decks.loading_title') : 'Nova is reading the project structure…');
+    const loadBody  = (window.NovaI18n ? NovaI18n.t('decks.loading_body')  : 'Analyzing supabase_schema.sql and the technical spec');
     wrap.innerHTML =
       '<div class="ppt-card"><div class="ppt-frame" style="display:flex;align-items:center;justify-content:center">' +
-        '<div style="text-align:center;color:#475569;font-family:Cairo,Tajawal,sans-serif">' +
+        '<div style="text-align:center;color:#475569;font-family:var(--nova-font,Cairo,Tajawal,sans-serif)">' +
           '<div class="spinner-border mb-3" style="color:#6366F1"></div>' +
-          '<div style="font-weight:700">يقرأ Nova بنية المشروع…</div>' +
-          '<div style="font-size:.85rem;margin-top:6px">جارٍ تحليل supabase_schema.sql والمواصفات التقنية</div>' +
+          '<div style="font-weight:700">' + escapeHtml(loadTitle) + '</div>' +
+          '<div style="font-size:.85rem;margin-top:6px">' + escapeHtml(loadBody) + '</div>' +
         '</div>' +
       '</div></div>';
   }
@@ -585,7 +587,7 @@ async function generateDeck() {
         stage: st.stage, score: st.score,
       },
       audience: 'investors',
-      locale: 'ar',
+      locale: (window.NovaI18n && NovaI18n.getLanguage()) || 'en',
     });
 
     // Server returns { slides: [...], meta: {...} }. Validate the shape
@@ -672,10 +674,11 @@ function paintDeck(slides) {
   wrap.innerHTML = slides.map(function (s, i) {
     const isCover = s.type === 'cover';
     const num = String(i + 1).padStart(2, '0') + ' / ' + String(total).padStart(2, '0');
+    const eyebrow = (window.NovaI18n ? NovaI18n.t('decks.cover_eyebrow') : 'Pitch Deck');
     const inner = isCover
       ? (
           '<div class="slide cover" data-type="cover">' +
-            '<div class="cover-eyebrow">عرض تقديمي</div>' +
+            '<div class="cover-eyebrow">' + escapeHtml(eyebrow) + '</div>' +
             '<h1 data-element="title">' + escapeHtml(s.title || '') + '</h1>' +
             (s.subtitle ? '<p data-element="subtitle">' + escapeHtml(s.subtitle) + '</p>' : '') +
             '<div class="cover-footer"><span>NOVA STARTUPOS AI</span><span>' + num + '</span></div>' +
@@ -1844,8 +1847,12 @@ document.addEventListener('DOMContentLoaded', function () {
 if (window.NovaApi && NovaApi.supabase) {
   NovaApi.supabase.auth.onAuthStateChange((event, session) => {
     if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
-      NovaApi.setToken(session.access_token);
-      // If authenticated but the dashboard is hidden, auto-login (no refresh needed).
+      // The Supabase SDK persists the session and auto-refreshes the
+      // access token. Our authedFetch() reads it on every call via
+      // supabase.auth.getSession(), so no manual mirroring is needed.
+      // (Calling NovaApi.setToken here used to throw — that helper was
+      //  retired in the v2 hardening; the SDK is now the single source
+      //  of truth for the JWT.)
       if (document.getElementById('dashboard').style.display !== 'block') {
         NovaApi.me().then(user => {
           if (user && typeof loginSuccess === 'function') {

@@ -1,0 +1,110 @@
+{
+  "_meta": {
+    "name": "العربية",
+    "code": "ar",
+    "dir": "rtl",
+    "font": "'Cairo','Tajawal','Segoe UI',Arial,sans-serif"
+  },
+  "common": {
+    "loading": "جارٍ التحميل…",
+    "save": "حفظ",
+    "cancel": "إلغاء",
+    "delete": "حذف",
+    "edit": "تعديل",
+    "add": "إضافة",
+    "create": "إنشاء",
+    "generate": "توليد",
+    "export": "تصدير",
+    "search": "بحث",
+    "filter": "تصفية",
+    "all": "الكل",
+    "open": "مفتوح",
+    "closed": "مغلق",
+    "active": "نشط",
+    "disabled": "موقوف",
+    "yes": "نعم",
+    "no": "لا",
+    "language": "اللغة",
+    "logout": "تسجيل الخروج",
+    "login": "تسجيل الدخول",
+    "signup": "إنشاء حساب"
+  },
+  "context": {
+    "admin": "إدارة",
+    "workspace": "مساحة العمل"
+  },
+  "section": {
+    "founder_os": "مساحتي",
+    "ai_modules": "وحدات الذكاء الاصطناعي",
+    "assistant": "المساعد",
+    "administration": "الإدارة",
+    "super_admin": "الإدارة العليا"
+  },
+  "nav": {
+    "dashboard": "اللوحة الرئيسية",
+    "my_startups": "شركاتي الناشئة",
+    "analytics": "التحليلات",
+    "documents": "المستندات",
+    "business_plans": "خطط العمل",
+    "pitch_decks": "العروض التقديمية",
+    "readiness": "تقييم الجاهزية",
+    "funding_assistant": "مساعد التمويل",
+    "visa_assistant": "مساعد التأشيرات",
+    "ai_copilot": "مساعد الذكاء الاصطناعي",
+    "billing": "الفوترة",
+    "settings": "الإعدادات",
+    "admin_dashboard": "لوحة الإدارة",
+    "users": "المستخدمون",
+    "subscriptions": "الاشتراكات",
+    "funding_db": "قاعدة بيانات التمويل",
+    "visa_db": "قاعدة بيانات التأشيرات",
+    "blog": "المدوّنة",
+    "cms": "إدارة المحتوى",
+    "support_tickets": "تذاكر الدعم",
+    "audit_logs": "سجلّات التدقيق",
+    "ai_providers": "مزوّدو الذكاء الاصطناعي",
+    "gateways": "بوّابات الدفع",
+    "email_settings": "إعدادات البريد",
+    "security": "الأمان",
+    "system_health": "صحّة النظام"
+  },
+  "decks": {
+    "title": "مولّد العروض التقديمية بالذكاء الاصطناعي",
+    "subtitle": "عرض احترافي للمستثمرين، يولَّد بالذكاء الاصطناعي اعتمادًا على سياق مشروعك.",
+    "generate": "توليد العرض",
+    "no_deck_title": "لم يُنشأ عرض بعد",
+    "no_deck_body": "اختر شركة ناشئة ثم اضغط توليد. سيبني Nova عرضًا من 10 شرائح جاهزًا للمستثمرين.",
+    "slides": "شريحة",
+    "export_pdf": "تصدير PDF",
+    "export_pptx": "تصدير PPTX",
+    "loading_title": "يقرأ Nova بنية المشروع…",
+    "loading_body": "جارٍ تحليل supabase_schema.sql والمواصفات التقنية",
+    "cover_eyebrow": "عرض تقديمي"
+  },
+  "billing": {
+    "title": "الفوترة والترقيات",
+    "current_plan": "الباقة الحالية",
+    "select_plan": "اختر الباقة",
+    "renews": "تجديد بتاريخ",
+    "cancels": "ينتهي بتاريخ",
+    "no_payments": "لا توجد مدفوعات بعد."
+  },
+  "auth": {
+    "email": "البريد الإلكتروني",
+    "password": "كلمة المرور",
+    "name": "الاسم الكامل",
+    "invalid_credentials": "بريد أو كلمة مرور غير صحيحة.",
+    "account_disabled": "حسابك موقوف. يرجى التواصل مع الدعم."
+  },
+  "pages": {
+    "dashboard_greeting": "مرحبًا بعودتك",
+    "documents_title": "مركز المستندات",
+    "settings_title": "الإعدادات",
+    "analytics_title": "التحليلات",
+    "funding_title": "مساعد التمويل",
+    "visa_title": "مساعد التأشيرات",
+    "copilot_title": "مساعد الذكاء الاصطناعي",
+    "plans_title": "مولّد خطط الأعمال بالذكاء الاصطناعي",
+    "readiness_title": "تقييم الجاهزية"
+  }
+}

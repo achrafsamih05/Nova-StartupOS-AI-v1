@@ -92,6 +92,11 @@
   global.setSidebarContext = setContext;
 
   /* ---- Sidebar nav injection (idempotent) ---- */
+  function tt(key, fallback) {
+    return (global.NovaI18n && typeof global.NovaI18n.t === 'function')
+      ? global.NovaI18n.t(key)
+      : fallback;
+  }
   function buildNav() {
     const nav = document.querySelector('#dbSidebar .db-nav');
     if (!nav) return;
@@ -102,16 +107,16 @@
       g.id = 'adminNavGroup';
       g.setAttribute('data-role-only', 'admin');
       g.innerHTML =
-        '<div class="db-nav-section">Administration</div>' +
-        navBtn('a-overview', 'fa-shield-halved',        'Admin Dashboard') +
-        navBtn('a-users',    'fa-users',                'Users') +
-        navBtn('a-billing',  'fa-file-invoice-dollar',  'Subscriptions') +
-        navBtn('a-funding',  'fa-sack-dollar',          'Funding DB') +
-        navBtn('a-visa',     'fa-passport',             'Visa DB') +
-        navBtn('a-blog',     'fa-newspaper',            'Blog') +
-        navBtn('a-cms',      'fa-pen-ruler',            'CMS') +
-        navBtn('a-support',  'fa-headset',              'Support Tickets') +
-        navBtn('a-audit',    'fa-clipboard-list',       'Audit Logs');
+        '<div class="db-nav-section" data-i18n="section.administration">Administration</div>' +
+        navBtn('a-overview', 'fa-shield-halved',       'nav.admin_dashboard') +
+        navBtn('a-users',    'fa-users',               'nav.users') +
+        navBtn('a-billing',  'fa-file-invoice-dollar', 'nav.subscriptions') +
+        navBtn('a-funding',  'fa-sack-dollar',         'nav.funding_db') +
+        navBtn('a-visa',     'fa-passport',            'nav.visa_db') +
+        navBtn('a-blog',     'fa-newspaper',           'nav.blog') +
+        navBtn('a-cms',      'fa-pen-ruler',           'nav.cms') +
+        navBtn('a-support',  'fa-headset',             'nav.support_tickets') +
+        navBtn('a-audit',    'fa-clipboard-list',      'nav.audit_logs');
       nav.appendChild(g);
     }
     if (!document.getElementById('superAdminNavGroup') && role.superAdmin) {
@@ -119,18 +124,33 @@
       g.id = 'superAdminNavGroup';
       g.setAttribute('data-role-only', 'super_admin');
       g.innerHTML =
-        '<div class="db-nav-section">Super Admin</div>' +
-        navBtn('s-ai',       'fa-robot',     'AI Providers') +
-        navBtn('s-gateways', 'fa-plug',      'Gateways') +
-        navBtn('s-email',    'fa-envelope',  'Email Settings') +
-        navBtn('s-security', 'fa-lock',      'Security') +
-        navBtn('s-system',   'fa-server',    'System Health');
+        '<div class="db-nav-section" data-i18n="section.super_admin">Super Admin</div>' +
+        navBtn('s-ai',       'fa-robot',     'nav.ai_providers') +
+        navBtn('s-gateways', 'fa-plug',      'nav.gateways') +
+        navBtn('s-email',    'fa-envelope',  'nav.email_settings') +
+        navBtn('s-security', 'fa-lock',      'nav.security') +
+        navBtn('s-system',   'fa-server',    'nav.system_health');
       nav.appendChild(g);
     }
+    // Apply translations to the freshly-injected groups (no-op if NovaI18n
+    // is still loading — it'll re-apply on the nova:lang-changed event).
+    if (global.NovaI18n && typeof global.NovaI18n.applyTranslations === 'function') {
+      global.NovaI18n.applyTranslations(document.getElementById('dbSidebar'));
+    }
   }
-  function navBtn(section, icon, label) {
-    return '<button class="db-nl" onclick="dbNav(\'' + section + '\',this)"><i class="fa-solid ' + icon + '"></i> ' + label + '</button>';
+  function navBtn(section, icon, key) {
+    return '<button class="db-nl" onclick="dbNav(\'' + section + '\',this)"><i class="fa-solid ' + icon + '"></i> <span data-i18n="' + key + '">' + tt(key, key) + '</span></button>';
   }
+
+  // Re-translate any imperatively-rendered admin tables / panels when the
+  // user toggles the language. The sidebar buttons use data-i18n and are
+  // handled automatically; this hook covers content that was rebuilt in JS.
+  document.addEventListener('nova:lang-changed', function () {
+    const sidebar = document.getElementById('dbSidebar');
+    if (sidebar && global.NovaI18n) {
+      global.NovaI18n.applyTranslations(sidebar);
+    }
+  });
 
   /* ---- Section container injection ---- */
   function buildSections() {

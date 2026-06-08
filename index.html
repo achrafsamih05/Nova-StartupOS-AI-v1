@@ -162,6 +162,35 @@
         .lm #sec-decks .ppt-card{ background:#fff; border-color:rgba(15,23,42,.08); }
 
         /* =====================================================================
+           Internationalization — applies the active locale's font globally
+           via the --nova-font CSS variable set by js/i18n.js. RTL flipping
+           is driven by `dir="rtl"` on <html>; nothing else needs to change.
+           ================================================================== */
+        html[lang]{ font-family: var(--nova-font, 'Space Grotesk','Segoe UI',Arial,sans-serif); }
+        html[lang="ar"] body{ font-family: var(--nova-font, 'Cairo','Tajawal',Arial,sans-serif); }
+        /* Mirror directional Bootstrap utilities under RTL. */
+        html[dir="rtl"] .me-1, html[dir="rtl"] .me-2 { margin-right:0 !important; margin-left:.25rem !important; }
+        html[dir="rtl"] .me-2 { margin-left:.5rem !important; }
+        html[dir="rtl"] .ms-1, html[dir="rtl"] .ms-2 { margin-left:0 !important; margin-right:.25rem !important; }
+        html[dir="rtl"] .ms-2 { margin-right:.5rem !important; }
+        html[dir="rtl"] .text-start{ text-align:right !important; }
+        html[dir="rtl"] .text-end  { text-align:left  !important; }
+        /* Language switcher pill — sits in the dashboard top bar. */
+        .lang-switch{ display:inline-flex;align-items:center;gap:0;
+          background:var(--bg3);border:1px solid var(--bd);border-radius:10px;padding:3px;height:38px; }
+        .lang-switch button{
+          all:unset;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+          min-width:38px;height:30px;padding:0 10px;border-radius:7px;
+          font-size:.74rem;font-weight:700;letter-spacing:.05em;color:var(--tx2);
+          transition:background .15s ease,color .15s ease;
+        }
+        .lang-switch button:hover{ color:var(--tx); }
+        .lang-switch button.on{
+          background:linear-gradient(135deg,#6366F1,#8b5cf6);color:#fff;
+          box-shadow:0 4px 12px -8px rgba(99,102,241,.7);
+        }
+
+        /* =====================================================================
            ROLE-BASED ACCESS CONTROL — sidebar visibility
            ---------------------------------------------------------------------
            The sidebar carries data-role and data-context. Privileged groups
@@ -817,27 +846,27 @@
 
                <!-- Context switcher (rendered only for admin/super_admin). -->
                <div id="navContextSwitcher" class="nav-ctx" role="group" aria-label="Sidebar context">
-                  <button type="button" class="nav-ctx-btn on" data-ctx="admin"     onclick="setSidebarContext('admin')"><i class="fa-solid fa-shield-halved"></i> Admin</button>
-                  <button type="button" class="nav-ctx-btn"    data-ctx="workspace" onclick="setSidebarContext('workspace')"><i class="fa-solid fa-briefcase"></i> Workspace</button>
+                  <button type="button" class="nav-ctx-btn on" data-ctx="admin"     onclick="setSidebarContext('admin')"><i class="fa-solid fa-shield-halved"></i> <span data-i18n="context.admin"></span>Admin</span></button>
+                  <button type="button" class="nav-ctx-btn"    data-ctx="workspace" onclick="setSidebarContext('workspace')"><i class="fa-solid fa-briefcase"></i> <span data-i18n="context.workspace">Workspace</span></button>
                </div>
 
                <!-- ===== USER WORKSPACE (always built; visibility is RBAC) ===== -->
                <div id="userNavGroup">
-                  <div class="db-nav-section">My Workspace</div>
-                  <button class="db-nl active" onclick="dbNav('overview',this)"><i class="fa-solid fa-gauge-high"></i> Dashboard</button>
-                  <button class="db-nl" onclick="dbNav('startups',this)"><i class="fa-solid fa-layer-group"></i> My Startups <span class="db-badge" id="navStartupCount">0</span></button>
-                  <button class="db-nl" onclick="dbNav('analytics',this)"><i class="fa-solid fa-chart-pie"></i> Analytics</button>
-                  <button class="db-nl" onclick="dbNav('documents',this)"><i class="fa-solid fa-folder-open"></i> Documents</button>
-                  <div class="db-nav-section">AI Modules</div>
-                  <button class="db-nl" onclick="dbNav('plans',this)"><i class="fa-solid fa-file-lines"></i> Business Plans</button>
-                  <button class="db-nl" onclick="dbNav('decks',this)"><i class="fa-solid fa-chalkboard-user"></i> Pitch Decks</button>
-                  <button class="db-nl" onclick="dbNav('readiness',this)"><i class="fa-solid fa-gauge"></i> Readiness Assessment</button>
-                  <button class="db-nl" onclick="dbNav('funding',this)"><i class="fa-solid fa-sack-dollar"></i> Funding Assistant</button>
-                  <button class="db-nl" onclick="dbNav('visa',this)"><i class="fa-solid fa-passport"></i> Visa Assistant</button>
-                  <div class="db-nav-section">Assistant</div>
-                  <button class="db-nl" onclick="dbNav('copilot',this)"><i class="fa-solid fa-robot"></i> AI Copilot <span class="db-badge" id="aiModeBadge" style="background:#fbbf24;color:#1a1a1a">Demo</span></button>
-                  <button class="db-nl" onclick="dbNav('billing',this)"><i class="fa-solid fa-credit-card"></i> Billing</button>
-                  <button class="db-nl" onclick="dbNav('settings',this)"><i class="fa-solid fa-gear"></i> Settings</button>
+                  <div class="db-nav-section" data-i18n="section.founder_os">My Workspace</div>
+                  <button class="db-nl active" onclick="dbNav('overview',this)"><i class="fa-solid fa-gauge-high"></i> <span data-i18n="nav.dashboard">Dashboard</span></button>
+                  <button class="db-nl" onclick="dbNav('startups',this)"><i class="fa-solid fa-layer-group"></i> <span data-i18n="nav.my_startups">My Startups</span> <span class="db-badge" id="navStartupCount">0</span></button>
+                  <button class="db-nl" onclick="dbNav('analytics',this)"><i class="fa-solid fa-chart-pie"></i> <span data-i18n="nav.analytics">Analytics</span></button>
+                  <button class="db-nl" onclick="dbNav('documents',this)"><i class="fa-solid fa-folder-open"></i> <span data-i18n="nav.documents">Documents</span></button>
+                  <div class="db-nav-section" data-i18n="section.ai_modules">AI Modules</div>
+                  <button class="db-nl" onclick="dbNav('plans',this)"><i class="fa-solid fa-file-lines"></i> <span data-i18n="nav.business_plans">Business Plans</span></button>
+                  <button class="db-nl" onclick="dbNav('decks',this)"><i class="fa-solid fa-chalkboard-user"></i> <span data-i18n="nav.pitch_decks">Pitch Decks</span></button>
+                  <button class="db-nl" onclick="dbNav('readiness',this)"><i class="fa-solid fa-gauge"></i> <span data-i18n="nav.readiness">Readiness Assessment</span></button>
+                  <button class="db-nl" onclick="dbNav('funding',this)"><i class="fa-solid fa-sack-dollar"></i> <span data-i18n="nav.funding_assistant">Funding Assistant</span></button>
+                  <button class="db-nl" onclick="dbNav('visa',this)"><i class="fa-solid fa-passport"></i> <span data-i18n="nav.visa_assistant">Visa Assistant</span></button>
+                  <div class="db-nav-section" data-i18n="section.assistant">Assistant</div>
+                  <button class="db-nl" onclick="dbNav('copilot',this)"><i class="fa-solid fa-robot"></i> <span data-i18n="nav.ai_copilot">AI Copilot</span> <span class="db-badge" id="aiModeBadge" style="background:#fbbf24;color:#1a1a1a">Demo</span></button>
+                  <button class="db-nl" onclick="dbNav('billing',this)"><i class="fa-solid fa-credit-card"></i> <span data-i18n="nav.billing">Billing</span></button>
+                  <button class="db-nl" onclick="dbNav('settings',this)"><i class="fa-solid fa-gear"></i> <span data-i18n="nav.settings">Settings</span></button>
                </div>
 
                <!-- #adminNavGroup and #superAdminNavGroup are injected by
@@ -845,7 +874,7 @@
                     receive the markup at all. -->
             </div>
             <div class="db-bottom">
-               <button class="db-nl" onclick="doLogout()" style="color:#f87171"><i class="fa-solid fa-right-from-bracket"></i> Log Out</button>
+               <button class="db-nl" onclick="doLogout()" style="color:#f87171"><i class="fa-solid fa-right-from-bracket"></i> <span data-i18n="common.logout"></span>Log Out</span></button>
             </div>
          </div>
          <!-- Top bar -->
@@ -859,6 +888,11 @@
             </div>
             <div class="ms-auto d-flex align-items-center gap-3">
                <button class="bgrd btn d-none d-md-flex align-items-center gap-2 px-3 py-2" style="font-size:.82rem" onclick="dbNav('copilot',document.querySelector('[onclick*=copilot]'))"><i class="fa-solid fa-robot"></i> Ask Copilot</button>
+               <!-- Language switcher (i18n) — wired by NovaI18n.switchLanguage. -->
+               <div class="lang-switch" role="group" aria-label="Language">
+                  <button type="button" data-lang-switch="en" onclick="NovaI18n.switchLanguage('en')" title="English">EN</button>
+                  <button type="button" data-lang-switch="ar" onclick="NovaI18n.switchLanguage('ar')" title="العربية">AR</button>
+               </div>
                <button class="boc d-flex align-items-center justify-content-center" id="dbThBtn" style="width:38px;height:38px;padding:0;border-radius:12px" onclick="toggleTheme()" aria-label="Toggle theme">
                <i class="fa-solid fa-sun" id="dbSunI" style="display:none"></i>
                <i class="fa-solid fa-moon" id="dbMoonI"></i>
@@ -1178,34 +1212,34 @@
                <div class="db-section" id="sec-decks">
                   <div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-3">
                      <div>
-                        <h4 style="font-size:1.4rem;font-weight:700;margin-bottom:4px">AI Pitch Deck Generator</h4>
-                        <p style="font-size:.875rem;color:var(--tx3);margin:0">عرض تقديمي احترافي بالعربية — منشأ بالذكاء الاصطناعي وموجّه لمستثمري الشركات الناشئة.</p>
+                        <h4 style="font-size:1.4rem;font-weight:700;margin-bottom:4px" data-i18n="decks.title">AI Pitch Deck Generator</h4>
+                        <p style="font-size:.875rem;color:var(--tx3);margin:0" data-i18n="decks.subtitle">عرض تقديمي احترافي بالعربية — منشأ بالذكاء الاصطناعي وموجّه لمستثمري الشركات الناشئة.</p>
                      </div>
                      <div class="d-flex gap-2 flex-wrap">
                         <select class="ninp mb-0" id="pdStartup" style="width:auto;min-width:170px">
                            <option>Your Startup</option>
                         </select>
-                        <button class="bgrd btn px-3 py-2" style="font-size:.85rem;white-space:nowrap" id="pdBtn" onclick="generateDeck()"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck</button>
+                        <button class="bgrd btn px-3 py-2" style="font-size:.85rem;white-space:nowrap" id="pdBtn" onclick="generateDeck()"><i class="fa-solid fa-wand-magic-sparkles me-2"></i><span data-i18n="decks.generate">Generate Deck</span></button>
                      </div>
                   </div>
 
                   <!-- Empty state -->
                   <div id="pdEmpty" class="nova-panel text-center d-flex flex-column align-items-center justify-content-center" style="min-height:300px">
                      <div class="qa-ico mb-2" style="background:rgba(99,102,241,.14);color:#818CF8;width:64px;height:64px;font-size:1.5rem"><i class="fa-solid fa-chalkboard-user"></i></div>
-                     <h6 class="mb-1">No deck generated yet</h6>
-                     <p style="font-size:.85rem;color:var(--tx3);max-width:340px">Pick a startup and click <strong>Generate Deck</strong>. Nova builds a 10-slide investor-ready deck in Arabic.</p>
+                     <h6 class="mb-1" data-i18n="decks.no_deck_title">No deck generated yet</h6>
+                     <p style="font-size:.85rem;color:var(--tx3);max-width:340px" data-i18n="decks.no_deck_body">Pick a startup and click <strong>Generate Deck</strong>. Nova builds a 10-slide investor-ready deck.</p>
                   </div>
 
                   <!-- Toolbar (hidden until a deck is rendered) -->
                   <div id="pdToolbar" class="nova-panel d-none align-items-center justify-content-between flex-wrap gap-3" style="padding:14px 18px;margin-bottom:16px">
                      <div class="d-flex align-items-center gap-3" style="font-size:.85rem;color:var(--tx2)">
-                        <span><i class="fa-solid fa-rectangle-list me-2" style="color:#818CF8"></i><strong id="pdSlideCount">0</strong> slides</span>
+                        <span><i class="fa-solid fa-rectangle-list me-2" style="color:#818CF8"></i><strong id="pdSlideCount">0</strong> <span data-i18n="decks.slides">slides</span></span>
                         <span style="color:var(--tx3)">·</span>
                         <span id="pdActiveStartup" style="color:var(--tx3)"></span>
                      </div>
                      <div class="d-flex gap-2">
-                        <button class="boc btn py-2 px-3" style="font-size:.82rem" id="pdExportPdfBtn" onclick="exportDeck('pdf')"><i class="fa-solid fa-file-pdf me-1"></i>Export PDF</button>
-                        <button class="bgrd btn py-2 px-3" style="font-size:.82rem" id="pdExportPptxBtn" onclick="exportDeck('pptx')"><i class="fa-solid fa-file-powerpoint me-1"></i>Export PPTX</button>
+                        <button class="boc btn py-2 px-3" style="font-size:.82rem" id="pdExportPdfBtn" onclick="exportDeck('pdf')"><i class="fa-solid fa-file-pdf me-1"></i><span data-i18n="decks.export_pdf">Export PDF</span></button>
+                        <button class="bgrd btn py-2 px-3" style="font-size:.82rem" id="pdExportPptxBtn" onclick="exportDeck('pptx')"><i class="fa-solid fa-file-powerpoint me-1"></i><span data-i18n="decks.export_pptx">Export PPTX</span></button>
                      </div>
                   </div>
 
@@ -1710,6 +1744,7 @@
       <script src="js/chart.umd.min.js"></script>
       <script src="js/api.js"></script>
       <script src="js/store.js"></script>
+      <script src="js/i18n.js"></script>
       <script src="js/ai.js"></script>
       <script src="js/export.js"></script>
       <script src="js/pptExporter.js"></script>

@@ -762,6 +762,22 @@
 
     /* =================== Backwards-compat shims ===================== */
     isAuthed() { return !!(supabase && supabase.auth); },
+
+    // ---- Token shims (deprecated — kept for backwards compatibility) ----
+    // The Supabase SDK is the single source of truth for the JWT. These
+    // functions used to mirror the token into localStorage['nova.token']
+    // for a legacy fetch helper that no longer exists. We retain them as
+    // safe no-ops / read-throughs so any third-party caller (or a stale
+    // cached script) cannot crash the app with:
+    //   "TypeError: NovaApi.setToken is not a function"
+    setToken(_token) { /* no-op: Supabase SDK manages persistence */ },
+    async getToken() {
+      if (!supabase) return null;
+      try {
+        const { data } = await supabase.auth.getSession();
+        return data && data.session ? data.session.access_token : null;
+      } catch (_) { return null; }
+    },
   };
 
   /* ----------------------- Internal mappers ------------------------- */
