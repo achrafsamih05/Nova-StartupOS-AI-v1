@@ -534,18 +534,30 @@ const DECK_SLIDES = [
   ['Funding Ask', 'fa-handshake', 'Raising a seed round to accelerate growth, expand the team, and reach the next funding milestone.']
 ];
 function generateDeck() {
-  const startup = document.getElementById('pdStartup').value || 'Your Startup';
+  const startup = (document.getElementById('pdStartup').value || '').trim() || 'Your Startup';
   lastDeckStartup = startup;
   setLoading('pdBtn', true);
 
   const st = NovaStore.getActiveStartup() || {};
+  // Project-aware system prompt: Nova architecture + this startup's profile.
+  const sysCtx = (window.NovaApi && NovaApi.buildProjectContextPrompt)
+    ? NovaApi.buildProjectContextPrompt({ startup: Object.assign({ name: startup }, st), audience: 'investors', locale: 'ar' })
+    : NovaAI.buildSystemPrompt({ startup: Object.assign({ name: startup }, st) });
+
+  // Strict JSON schema the LLM must follow. We tolerate code fences in
+  // parseDeckJson(), but ask explicitly for plain JSON.
   const userPrompt =
-    `Build a 10-slide investor pitch deck for "${startup}" (industry: ${st.industry || 'tech'}, country: ${st.country || 'global'}). ` +
-    `Problem: ${st.problem || 'an unmet need'}. Solution: ${st.solution || 'an AI-native solution'}. ` +
-    `Output STRICT JSON: {"slides":[{"title":"...","body":"..."}]} with EXACTLY these 10 slide titles in order: ` +
-    `Problem, Solution, Market, Product, Business Model, Competition, Traction, Team, Financials, Funding Ask. ` +
-    `Each "body" must be 2-4 concise sentences. Return JSON only — no prose, no code fences.`;
-  const sysCtx = NovaAI.buildSystemPrompt({ startup: { name: startup, industry: st.industry, country: st.country, market: st.market, problem: st.problem, solution: st.solution } });
+    'ابنِ عرضًا تقديميًا احترافيًا للمستثمرين بالعربية الفصحى لشركة "' + startup + '" ' +
+    '(القطاع: ' + (st.industry || 'تقنية') + '، الدولة: ' + (st.country || 'عالمي') + '). ' +
+    'أعد JSON صارم بهذا الشكل بدون أي نص خارج JSON: ' +
+    '{"slides":[{"type":"cover","title":"...","subtitle":"..."},' +
+    '{"type":"standard","title":"...","content":"...","bullets":["...","..."]}]}. ' +
+    'يجب أن يحتوي العرض على 10 شرائح بالعناوين التالية بالترتيب: ' +
+    '1) شريحة غلاف (type=cover) باسم الشركة والشعار التسويقي. ' +
+    '2) المشكلة. 3) الحل. 4) السوق وحجمه. 5) المنتج. 6) نموذج الأعمال. ' +
+    '7) المنافسة والميزة التنافسية. 8) الجاذبية والمؤشرات. 9) الفريق. 10) الطلب التمويلي. ' +
+    'لكل شريحة قياسية: "content" فقرة موجزة (٢-٣ جمل)، و"bullets" مصفوفة من 3-5 نقاط مختصرة. ' +
+    'استخدم بيانات الشركة المتاحة لتخصيص المحتوى. لا تذكر JSON أو الوسوم في النص.';
 
   let acc = '';
   NovaAI.generateStream(
@@ -553,9 +565,11 @@ function generateDeck() {
     (delta) => { acc += delta; },
     (full) => {
       setLoading('pdBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck');
-      const slides = parseDeckJson(full || acc) || DECK_SLIDES.map(s => ({ title: s[0], body: s[2] }));
-      paintDeck(slides.map(s => [s.title, 'fa-rectangle-list', s.body]));
+      const slides = parseDeckJson(full || acc) || fallbackDeck(startup, st);
+      paintDeck(slides);
       novaToast('Pitch deck generated and saved.');
+      // Persist as a 'deck' document for the Documents Center.
+      persistGeneratedDocument('deck', startup + ' — Pitch Deck', JSON.stringify(slides));
     },
     (err) => {
       setLoading('pdBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck');
@@ -564,42 +578,104 @@ function generateDeck() {
   );
 }
 
-// Parse the assistant's JSON deck. Tolerant of stray code fences / prose.
+// Tolerant JSON extractor — accepts plain JSON, fenced JSON, or prose+JSON.
 function parseDeckJson(text) {
   if (!text) return null;
+  // Try direct parse first (best case).
+  try {
+    const direct = JSON.parse(text);
+    if (direct && Array.isArray(direct.slides) && direct.slides.length) return direct.slides;
+  } catch (_) {}
+  // Try the largest {...} substring containing "slides".
   const m = text.match(/\{[\s\S]*"slides"[\s\S]*\}/);
   if (!m) return null;
   try {
     const obj = JSON.parse(m[0]);
-    if (Array.isArray(obj.slides) && obj.slides.length) return obj.slides;
+    if (obj && Array.isArray(obj.slides) && obj.slides.length) return obj.slides;
   } catch (_) {}
   return null;
 }
+
+// Hard fallback used only if both the AI and the parser return nothing —
+// keeps the UI deterministic on flaky upstreams.
+function fallbackDeck(name, st) {
+  const ind = st && st.industry ? st.industry : 'القطاع التقني';
+  return [
+    { type: 'cover',    title: name, subtitle: 'عرض تقديمي للمستثمرين • ' + ind },
+    { type: 'standard', title: 'المشكلة', content: 'العملاء يعانون من تجربة بطيئة ومجزّأة وعالية التكلفة في ' + ind + '.', bullets: ['متكرّرة ومكلفة', 'تتفاقم مع رقمنة السوق', 'لا توجد حلول محلّية متكاملة'] },
+    { type: 'standard', title: 'الحل', content: 'منتج مُمكَّن بالذكاء الاصطناعي يقدّم القيمة خلال دقائق بدل أسابيع.', bullets: ['تجربة سلسة', 'تكامل مفتوح', 'يعمل بصيغة SaaS'] },
+    { type: 'standard', title: 'السوق وحجمه', content: 'سوق كبير ومتنامٍ مع رياح رقمية مساعدة وانتشار حلول الذكاء الاصطناعي.', bullets: ['TAM واسع', 'SAM إقليمي قابل للنفاذ', 'SOM واضح في أول 24 شهرًا'] },
+    { type: 'standard', title: 'المنتج', content: 'منصّة بسيطة في البداية وقوية عند التوسّع، تركيز على الجوال أولًا.', bullets: ['وحدات متكاملة', 'أتمتة ذكية', 'تحليلات حيّة'] },
+    { type: 'standard', title: 'نموذج الأعمال', content: 'اشتراكات شهرية وسنوية مع طبقات استخدام، وإيرادات شراكات.', bullets: ['ARPU متنامٍ', 'هامش صحي', 'معدل احتفاظ مرتفع'] },
+    { type: 'standard', title: 'المنافسة والميزة التنافسية', content: 'الحلول التقليدية بطيئة ومكلفة، ميزتنا الذكاء الاصطناعي والفهم المحلي.', bullets: ['AI-native', 'تكامل محلي', 'تجربة موحَّدة'] },
+    { type: 'standard', title: 'الجاذبية والمؤشرات', content: 'تجارب أولية واعدة ونمو أسبوعي قوي بالاستخدام والاحتفاظ.', bullets: ['MAU متنامٍ', 'NPS مرتفع', 'قائمة انتظار فعّالة'] },
+    { type: 'standard', title: 'الفريق', content: 'فريق مؤسس بخبرة عميقة في القطاع وقدرة هندسية وتجارية مثبتة.', bullets: ['خبرة قطاعية', 'تنفيذ سريع', 'سجل سابق ناجح'] },
+    { type: 'standard', title: 'الطلب التمويلي', content: 'نسعى إلى جولة Seed لتسريع النمو وتوسيع الفريق وبلوغ المرحلة التالية.', bullets: ['تطوير المنتج', 'تسويق وتوسّع', 'توظيف رئيسي'] },
+  ];
+}
+
 let lastDeckStartup = '';
 let lastDeckId = null;
+
+// Render the deck into #pdResult using the semantic schema:
+//   <div class="slide cover" data-type="cover">
+//     <h1 data-element="title">…</h1>
+//     <p  data-element="subtitle">…</p>
+//   </div>
+//   <div class="slide" data-type="standard">
+//     <h2 data-element="title">…</h2>
+//     <p  data-element="content">…</p>
+//     <ul data-element="list"><li>…</li></ul>
+//   </div>
 function paintDeck(slides) {
-    document.getElementById('pdEmpty').style.display = 'none';
-    const wrap = document.getElementById('pdResult');
-    wrap.style.display = 'flex';
-    wrap.innerHTML = slides.map((s, i) => `
-      <div class="col-md-6 col-xl-4">
-        <div class="deck-slide">
-          <span class="slide-num">${i + 1}/${slides.length}</span>
-          <div class="slide-ico"><i class="fa-solid ${s[1] || 'fa-rectangle-list'}"></i></div>
-          <h6>${escapeHtml(s[0])}</h6>
-          <p>${escapeHtml(s[2])}</p>
-        </div>
-      </div>`).join('') + `
-      <div class="col-12 mt-2 d-flex justify-content-end gap-2">
-        <button class="boc btn py-2 px-3" style="font-size:.82rem" onclick="exportDeck('pptx')"><i class="fa-solid fa-file-powerpoint me-1"></i>Export PPTX</button>
-        <button class="boc btn py-2 px-3" style="font-size:.82rem" onclick="exportDeck('pdf')"><i class="fa-solid fa-file-pdf me-1"></i>PDF</button>
-        <button class="bgrd btn py-2 px-3" style="font-size:.82rem" onclick="dbNav('funding',document.querySelector('[onclick*=funding]'))"><i class="fa-solid fa-sack-dollar me-1"></i>Find Funding</button>
-      </div>`;
-    wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    // Persist the generated deck (title + slide JSON) to the documents library.
-    const deckTitle = (lastDeckStartup || 'Startup') + ' — Pitch Deck';
-    const deckContent = JSON.stringify(slides.map(s => ({ title: s[0], body: s[2] })));
-    persistGeneratedDocument('deck', deckTitle, deckContent);
+  document.getElementById('pdEmpty').style.display = 'none';
+  const wrap = document.getElementById('pdResult');
+  wrap.style.display = 'grid';
+  const total = slides.length;
+
+  wrap.innerHTML = slides.map(function (s, i) {
+    const isCover = s.type === 'cover';
+    const num = String(i + 1).padStart(2, '0') + ' / ' + String(total).padStart(2, '0');
+    const inner = isCover
+      ? (
+          '<div class="slide cover" data-type="cover">' +
+            '<div class="cover-eyebrow">عرض تقديمي</div>' +
+            '<h1 data-element="title">' + escapeHtml(s.title || '') + '</h1>' +
+            (s.subtitle ? '<p data-element="subtitle">' + escapeHtml(s.subtitle) + '</p>' : '') +
+            '<div class="cover-footer"><span>NOVA STARTUPOS AI</span><span>' + num + '</span></div>' +
+          '</div>'
+        )
+      : (
+          '<div class="slide" data-type="standard">' +
+            '<h2 data-element="title">' + escapeHtml(s.title || '') + '</h2>' +
+            (s.content ? '<p data-element="content">' + escapeHtml(s.content) + '</p>' : '') +
+            (Array.isArray(s.bullets) && s.bullets.length
+              ? '<ul data-element="list">' + s.bullets.map(b => '<li>' + escapeHtml(b) + '</li>').join('') + '</ul>'
+              : '') +
+          '</div>'
+        );
+    const typeBadge = isCover ? 'COVER' : 'SLIDE';
+    return (
+      '<div class="ppt-card">' +
+        '<div class="ppt-frame">' +
+          '<span class="ppt-num">' + num + '</span>' +
+          inner +
+        '</div>' +
+        '<div class="ppt-meta">' +
+          '<span class="text-truncate" style="max-width:70%">' + escapeHtml(s.title || '') + '</span>' +
+          '<span class="ppt-type">' + typeBadge + '</span>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('');
+
+  // Reveal the toolbar and update its meta.
+  const toolbar = document.getElementById('pdToolbar');
+  if (toolbar) { toolbar.classList.remove('d-none'); toolbar.classList.add('d-flex'); }
+  setText('pdSlideCount', String(total));
+  setText('pdActiveStartup', lastDeckStartup ? ('· ' + lastDeckStartup) : '');
+
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* --------------------- READINESS ASSESSMENT ---------------------- */
@@ -1196,11 +1272,28 @@ function exportPlan(fmt) {
 function exportDeck(fmt) {
   const name = lastDeckStartup || (NovaStore.getActiveStartup() && NovaStore.getActiveStartup().name) || 'Startup';
   if (fmt === 'pdf') return NovaExport.exportPDF(name + ' Pitch Deck');
-  // Pull current slides from the rendered deck.
+
+  // PPTX → use the dedicated NovaPpt exporter that reads the semantic
+  // schema (.slide[data-type="cover|standard"] with [data-element]).
+  if (fmt === 'pptx') {
+    if (!window.NovaPpt) return novaToast('Export engine not loaded yet — try again in a moment.');
+    const slides = NovaPpt.parseSlides('#pdResult');
+    if (!slides.length) return novaToast('Generate a pitch deck first.');
+    const fileName = name.replace(/\s+/g, '-').toLowerCase() + '-pitch-deck';
+    const btn = document.getElementById('pdExportPptxBtn');
+    if (btn) { btn.disabled = true; btn.dataset.html = btn.innerHTML; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Exporting…'; }
+    return NovaPpt.exportDeck({ slides, fileName, title: name + ' — Pitch Deck', author: name })
+      .then(() => novaToast('PowerPoint deck exported.'))
+      .catch(e => novaToast('Export failed: ' + (e.message || 'unknown error')))
+      .finally(() => { if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.html || 'Export PPTX'; } });
+  }
+
+  // Legacy fallback: HTML deck via NovaExport.
   const wrap = document.getElementById('pdResult');
   const slides = [];
-  if (wrap) wrap.querySelectorAll('.deck-slide').forEach(d => {
-    const t = d.querySelector('h6'); const p = d.querySelector('p');
+  if (wrap) wrap.querySelectorAll('.slide[data-type]').forEach(d => {
+    const t = d.querySelector('[data-element="title"]');
+    const p = d.querySelector('[data-element="content"], [data-element="subtitle"]');
     slides.push({ title: t ? t.textContent.trim() : 'Slide', body: p ? p.textContent.trim() : '' });
   });
   if (!slides.length) return novaToast('Generate a pitch deck first.');

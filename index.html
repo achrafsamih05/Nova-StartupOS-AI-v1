@@ -7,7 +7,8 @@
       <meta name="author" content="Nova StartupOS AI">
       <title>Nova StartupOS AI - Build Your Startup with AI</title>
       <link rel="preconnect" href="https://fonts.googleapis.com">
-      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Cairo:wght@400;600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
       <!-- Bootstrap 5.3 -->
       <link href="css/bootstrap.min.css" rel="stylesheet"/>
       <!-- AOS Animate on Scroll -->
@@ -22,6 +23,144 @@
       <link rel="stylesheet" href="css/style.css" />
       <!-- Nova StartupOS AI overrides -->
       <link rel="stylesheet" href="css/nova.css" />
+
+      <!-- Pitch Deck presentation styles (scoped to #sec-decks) -->
+      <style>
+        /* ===== Presentation dashboard — Pitch Decks (RTL Arabic 16:9) =====
+           All styles are scoped under #sec-decks so the existing UI is
+           untouched. The slide preview is a true 16:9 surface so what the
+           user sees matches the exported PPTX 1:1. */
+        #sec-decks .ppt-grid{
+          display:grid;
+          grid-template-columns:repeat(auto-fill,minmax(360px,1fr));
+          gap:18px;
+        }
+        #sec-decks .ppt-card{
+          position:relative;
+          background:var(--bg2);
+          border:1px solid var(--bd);
+          border-radius:14px;
+          padding:14px;
+          transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+        }
+        #sec-decks .ppt-card:hover{
+          transform:translateY(-2px);
+          border-color:rgba(99,102,241,.45);
+          box-shadow:0 12px 30px -18px rgba(99,102,241,.55);
+        }
+        #sec-decks .ppt-frame{
+          position:relative;
+          width:100%;
+          aspect-ratio:16/9;
+          border-radius:10px;
+          overflow:hidden;
+          box-shadow:0 1px 0 rgba(255,255,255,.04) inset, 0 14px 28px -22px rgba(0,0,0,.6);
+          background:#fff;
+        }
+        #sec-decks .ppt-num{
+          position:absolute;top:10px;left:10px;
+          font-family:'Space Grotesk',sans-serif;
+          font-size:.68rem;font-weight:700;letter-spacing:.08em;
+          padding:4px 10px;border-radius:100px;
+          background:rgba(15,23,42,.65);color:#fff;backdrop-filter:blur(6px);
+          z-index:2;
+        }
+        /* ----- Slide content (rendered identically to PPTX export) ---- */
+        #sec-decks .slide{
+          position:absolute;inset:0;
+          display:flex;flex-direction:column;
+          padding:7% 6%;
+          font-family:'Cairo','Tajawal','Segoe UI',Arial,sans-serif;
+          direction:rtl;text-align:right;
+          color:#0f172a;background:#ffffff;
+        }
+        #sec-decks .slide [data-element="title"]{
+          font-weight:800;line-height:1.25;color:#0f172a;
+          margin:0 0 .55em;letter-spacing:0;
+        }
+        #sec-decks .slide h2[data-element="title"]{
+          font-size:clamp(1.25rem,2.6vw,1.9rem);
+          padding-bottom:.45em;
+          border-bottom:none;
+          position:relative;
+        }
+        #sec-decks .slide h2[data-element="title"]::after{
+          content:'';position:absolute;right:0;bottom:0;
+          width:64px;height:4px;border-radius:4px;
+          background:linear-gradient(90deg,#6366F1,#818CF8);
+        }
+        #sec-decks .slide [data-element="content"]{
+          font-size:clamp(.78rem,1.15vw,1rem);
+          line-height:1.75;color:#334155;margin:0 0 .8em;
+        }
+        #sec-decks .slide ul[data-element="list"]{
+          list-style:none;padding:0;margin:.4em 0 0;
+        }
+        #sec-decks .slide ul[data-element="list"] li{
+          position:relative;padding:.18em 1.1em .18em 0;
+          font-size:clamp(.75rem,1.1vw,.95rem);
+          line-height:1.7;color:#334155;
+        }
+        #sec-decks .slide ul[data-element="list"] li::before{
+          content:'';position:absolute;right:0;top:.85em;
+          width:.45em;height:.45em;border-radius:50%;
+          background:#6366F1;
+        }
+        /* ----- Cover slide variant ----- */
+        #sec-decks .slide.cover{
+          background:linear-gradient(135deg,#0F172A 0%,#1E293B 100%);
+          color:#fff;justify-content:center;
+          padding:8% 6%;
+          overflow:hidden;
+        }
+        #sec-decks .slide.cover::before{
+          content:'';position:absolute;top:-30%;right:-15%;
+          width:60%;height:120%;border-radius:50%;
+          background:radial-gradient(circle,rgba(99,102,241,.35) 0%,transparent 70%);
+          pointer-events:none;
+        }
+        #sec-decks .slide.cover::after{
+          content:'';position:absolute;top:0;left:0;right:0;height:5px;
+          background:linear-gradient(90deg,#6366F1 0%,#818CF8 100%);
+        }
+        #sec-decks .slide.cover .cover-eyebrow{
+          font-size:clamp(.65rem,.95vw,.85rem);font-weight:700;
+          color:#818CF8;letter-spacing:.32em;margin-bottom:1em;
+          text-transform:uppercase;position:relative;z-index:1;
+        }
+        #sec-decks .slide.cover h1[data-element="title"]{
+          font-size:clamp(1.6rem,3.4vw,2.6rem);
+          color:#fff;line-height:1.2;margin:0 0 .5em;
+          position:relative;z-index:1;
+        }
+        #sec-decks .slide.cover h1[data-element="title"]::after{
+          content:'';display:block;width:72px;height:5px;border-radius:4px;
+          background:#6366F1;margin:.6em 0 0 auto;
+        }
+        #sec-decks .slide.cover [data-element="subtitle"]{
+          font-size:clamp(.85rem,1.4vw,1.1rem);
+          color:#CBD5E1;line-height:1.6;margin:0;max-width:90%;
+          margin-right:0;margin-left:auto;position:relative;z-index:1;
+        }
+        #sec-decks .slide.cover .cover-footer{
+          position:absolute;bottom:7%;right:6%;left:6%;
+          display:flex;justify-content:space-between;
+          font-size:clamp(.6rem,.9vw,.78rem);
+          color:#64748B;letter-spacing:.18em;font-weight:600;
+          z-index:1;
+        }
+        /* ----- Card meta row ----- */
+        #sec-decks .ppt-meta{
+          display:flex;align-items:center;justify-content:space-between;
+          margin-top:12px;font-size:.78rem;color:var(--tx3);
+        }
+        #sec-decks .ppt-meta .ppt-type{
+          padding:3px 9px;border-radius:100px;font-weight:600;font-size:.7rem;
+          background:rgba(99,102,241,.14);color:#818CF8;letter-spacing:.05em;
+        }
+        /* Light mode tweaks */
+        .lm #sec-decks .ppt-card{ background:#fff; border-color:rgba(15,23,42,.08); }
+      </style>
       <!-- Supabase JS SDK (must load before custom scripts) -->
       <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
    </head>
@@ -969,21 +1108,38 @@
                   <div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-3">
                      <div>
                         <h4 style="font-size:1.4rem;font-weight:700;margin-bottom:4px">AI Pitch Deck Generator</h4>
-                        <p style="font-size:.875rem;color:var(--tx3);margin:0">Generate a complete 10-slide investor pitch deck.</p>
+                        <p style="font-size:.875rem;color:var(--tx3);margin:0">عرض تقديمي احترافي بالعربية — منشأ بالذكاء الاصطناعي وموجّه لمستثمري الشركات الناشئة.</p>
                      </div>
-                     <div class="d-flex gap-2">
-                        <select class="ninp mb-0" id="pdStartup" style="width:auto">
-                           <option>FlowHealth</option><option>Dabba Logistics</option><option>GridSense</option>
+                     <div class="d-flex gap-2 flex-wrap">
+                        <select class="ninp mb-0" id="pdStartup" style="width:auto;min-width:170px">
+                           <option>Your Startup</option>
                         </select>
                         <button class="bgrd btn px-3 py-2" style="font-size:.85rem;white-space:nowrap" id="pdBtn" onclick="generateDeck()"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck</button>
                      </div>
                   </div>
+
+                  <!-- Empty state -->
                   <div id="pdEmpty" class="nova-panel text-center d-flex flex-column align-items-center justify-content-center" style="min-height:300px">
-                     <div class="qa-ico mb-2" style="background:rgba(245,158,11,.12);color:#fbbf24;width:64px;height:64px;font-size:1.5rem"><i class="fa-solid fa-chalkboard-user"></i></div>
+                     <div class="qa-ico mb-2" style="background:rgba(99,102,241,.14);color:#818CF8;width:64px;height:64px;font-size:1.5rem"><i class="fa-solid fa-chalkboard-user"></i></div>
                      <h6 class="mb-1">No deck generated yet</h6>
-                     <p style="font-size:.85rem;color:var(--tx3);max-width:340px">Pick a startup and click Generate Deck. Nova builds all 10 investor slides for you.</p>
+                     <p style="font-size:.85rem;color:var(--tx3);max-width:340px">Pick a startup and click <strong>Generate Deck</strong>. Nova builds a 10-slide investor-ready deck in Arabic.</p>
                   </div>
-                  <div id="pdResult" class="row g-3" style="display:none"></div>
+
+                  <!-- Toolbar (hidden until a deck is rendered) -->
+                  <div id="pdToolbar" class="nova-panel d-none align-items-center justify-content-between flex-wrap gap-3" style="padding:14px 18px;margin-bottom:16px">
+                     <div class="d-flex align-items-center gap-3" style="font-size:.85rem;color:var(--tx2)">
+                        <span><i class="fa-solid fa-rectangle-list me-2" style="color:#818CF8"></i><strong id="pdSlideCount">0</strong> slides</span>
+                        <span style="color:var(--tx3)">·</span>
+                        <span id="pdActiveStartup" style="color:var(--tx3)"></span>
+                     </div>
+                     <div class="d-flex gap-2">
+                        <button class="boc btn py-2 px-3" style="font-size:.82rem" id="pdExportPdfBtn" onclick="exportDeck('pdf')"><i class="fa-solid fa-file-pdf me-1"></i>Export PDF</button>
+                        <button class="bgrd btn py-2 px-3" style="font-size:.82rem" id="pdExportPptxBtn" onclick="exportDeck('pptx')"><i class="fa-solid fa-file-powerpoint me-1"></i>Export PPTX</button>
+                     </div>
+                  </div>
+
+                  <!-- Result (rendered slide previews — 16:9 cards in a responsive grid) -->
+                  <div id="pdResult" class="ppt-grid" style="display:none"></div>
                </div>
                <!-- ============ READINESS ASSESSMENT ============ -->
                <div class="db-section" id="sec-readiness">
@@ -1485,6 +1641,7 @@
       <script src="js/store.js"></script>
       <script src="js/ai.js"></script>
       <script src="js/export.js"></script>
+      <script src="js/pptExporter.js"></script>
       <script src="js/wizard.js"></script>
       <script src="js/admin.js"></script>
       <script src="js/main.js"></script>

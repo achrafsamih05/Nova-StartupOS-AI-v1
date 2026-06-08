@@ -351,6 +351,55 @@
 
     /* ========================= AI STREAMING ========================= */
     /**
+     * Build a project-aware system prompt that grounds the LLM in this
+     * specific startup's architecture (schema, spec) and the active
+     * startup's profile fields. Used by the deck/plan generators so the
+     * AI never has to guess what tables, modules, or stage values exist.
+     *
+     * @param {Object} ctx
+     * @param {Object} [ctx.startup]   — { name, industry, country, market, problem, solution, stage, score }
+     * @param {string} [ctx.audience]  — 'investors' | 'team' | 'visa' (defaults 'investors')
+     * @param {string} [ctx.locale]    — 'ar' | 'en' (defaults 'ar')
+     * @returns {string} the composed system prompt (server-trusted)
+     */
+    buildProjectContextPrompt(ctx) {
+      ctx = ctx || {};
+      const lang = ctx.locale || 'ar';
+      const audience = ctx.audience || 'investors';
+      const s = ctx.startup || {};
+      const intro = lang === 'ar'
+        ? 'أنت Nova، شريك ذكاء اصطناعي يساعد المؤسسين على بناء عروض تقديمية وخطط أعمال بمستوى المستثمرين.'
+        : 'You are Nova, an AI co-founder building investor-ready pitch decks and business plans.';
+      const platformLine = lang === 'ar'
+        ? 'منصّة العمل: Nova StartupOS AI — تطبيق صفحة واحدة (SPA) مبني بـ Vanilla JS، يعتمد Supabase Auth + Postgres مع RLS، تخزين Supabase، ووظائف Vercel السيرفرلِس لبثّ الذكاء الاصطناعي والمدفوعات.'
+        : 'Platform: Nova StartupOS AI — Vanilla JS SPA on Supabase Auth + Postgres (RLS) + Storage with Vercel serverless functions for AI streaming and Stripe.';
+      const schemaSummary = lang === 'ar'
+        ? 'الجداول الأساسية: profiles, startups, generated_documents, support_tickets, blog_posts, funding_sources, visa_programs, ai_providers_config, payment_gateways, blocked_ips. والمراحل المعتمدة لجدول startups.current_stage هي: Idea, MVP, Early Stage, Growth, Scale.'
+        : 'Core tables: profiles, startups, generated_documents, support_tickets, blog_posts, funding_sources, visa_programs, ai_providers_config, payment_gateways, blocked_ips. startups.current_stage values: Idea, MVP, Early Stage, Growth, Scale.';
+      const audienceLine = lang === 'ar'
+        ? (audience === 'investors'
+            ? 'الجمهور: مستثمرون مرحلة Pre-seed إلى Series A. ركّز على المشكلة، الحل، حجم السوق، نموذج الإيرادات، الجاذبية، الفريق، والطلب التمويلي.'
+            : 'الجمهور: ' + audience)
+        : 'Audience: pre-seed to Series A investors. Emphasize problem, solution, market size, revenue model, traction, team, ask.';
+      const styleLine = lang === 'ar'
+        ? 'الأسلوب: عربية فصحى موجزة، جمل قصيرة، أرقام عند توفّرها، تجنّب الإطالة. لا تستخدم أيّ Markdown إلا إذا طُلب JSON صريح.'
+        : 'Style: concise, sharp sentences, prefer numbers, avoid filler. No Markdown unless explicit JSON is requested.';
+      const profileLines = [];
+      if (s.name)     profileLines.push((lang === 'ar' ? '- الاسم: '     : '- Name: ')      + s.name);
+      if (s.industry) profileLines.push((lang === 'ar' ? '- القطاع: '    : '- Industry: ')  + s.industry);
+      if (s.country)  profileLines.push((lang === 'ar' ? '- الدولة: '    : '- Country: ')   + s.country);
+      if (s.market)   profileLines.push((lang === 'ar' ? '- السوق: '     : '- Market: ')    + s.market);
+      if (s.problem)  profileLines.push((lang === 'ar' ? '- المشكلة: '   : '- Problem: ')   + s.problem);
+      if (s.solution) profileLines.push((lang === 'ar' ? '- الحل: '      : '- Solution: ')  + s.solution);
+      if (s.stage)    profileLines.push((lang === 'ar' ? '- المرحلة: '   : '- Stage: ')     + s.stage);
+      if (s.score)    profileLines.push((lang === 'ar' ? '- نقاط الجاهزية: ' : '- Readiness: ') + s.score + '/100');
+      const profileBlock = profileLines.length
+        ? (lang === 'ar' ? '\n\nبيانات الشركة الناشئة:\n' : '\n\nStartup profile:\n') + profileLines.join('\n')
+        : '';
+      return [intro, platformLine, schemaSummary, audienceLine, styleLine].join(' ') + profileBlock;
+    },
+
+    /**
      * Stream a Nova AI generation through the secure /api/ai-stream proxy.
      * No API key ever touches the browser. Auth is the user's Supabase JWT.
      */
