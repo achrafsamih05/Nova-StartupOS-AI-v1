@@ -349,6 +349,26 @@
       return data;
     },
 
+    /* ====================== PROJECT-AWARE DECK ====================== */
+    /**
+     * Ask the server to generate a project-aware pitch deck. The server
+     * reads supabase_schema.sql + TECHNICAL_SPECIFICATION.md, calls
+     * Claude (with OpenRouter / OpenAI fallbacks), and returns a strict
+     * JSON array shaped:
+     *   [{type:'cover', title, subtitle},
+     *    {type:'standard', title, content, bullets:[]}]
+     *
+     * @param {Object} payload
+     * @param {string} [payload.startupName]  Name shown on the cover slide.
+     * @param {Object} [payload.startup]      Active startup row (industry, country, market, problem, solution, stage).
+     * @param {string} [payload.audience]     'investors' (default) | 'team' | 'visa'
+     * @param {string} [payload.locale]       'ar' (default) | 'en'
+     * @returns {Promise<{slides: Array, meta: Object}>}
+     */
+    async generateDeck(payload) {
+      return authedFetch('/api/generate-deck', { method: 'POST', body: payload || {} });
+    },
+
     /* ========================= AI STREAMING ========================= */
     /**
      * Build a project-aware system prompt that grounds the LLM in this

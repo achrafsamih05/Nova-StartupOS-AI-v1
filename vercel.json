@@ -5,12 +5,17 @@
     { "source": "/api/ai-stream",       "destination": "/api/ai-stream.js" },
     { "source": "/api/stripe-checkout", "destination": "/api/stripe-checkout.js" },
     { "source": "/api/stripe-webhook",  "destination": "/api/stripe-webhook.js" },
+    { "source": "/api/generate-deck",   "destination": "/api/generate-deck.js" },
     { "source": "/api/health",          "destination": "/api/health.js" }
   ],
   "functions": {
     "api/ai-stream.js":       { "maxDuration": 60 },
     "api/stripe-checkout.js": { "maxDuration": 10 },
     "api/stripe-webhook.js":  { "maxDuration": 10 },
+    "api/generate-deck.js":   {
+      "maxDuration": 60,
+      "includeFiles": "{supabase_schema.sql,supabase_schema_v2.sql,TECHNICAL_SPECIFICATION.md}"
+    },
     "api/health.js":          { "maxDuration": 5 }
   },
   "headers": [
