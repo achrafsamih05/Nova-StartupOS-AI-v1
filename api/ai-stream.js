@@ -19,6 +19,7 @@ const {
   checkRateLimit, incrementUsage, recordAiRequest, recordAudit,
   clientIp, getServiceClient,
 } = require('./_lib/auth');
+const { sanitizeMessages } = require('./_lib/messages');
 
 // Per-provider upstream endpoints + the env var holding each secret key.
 // Anthropic and Gemini have their own native APIs but require slightly
@@ -190,11 +191,19 @@ module.exports = async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  const messages = [
+  // Build the raw turn list, then sanitize so every provider receives a
+  // well-formed conversation: exactly one leading system, then strict
+  // user/assistant/user… alternation ending on a user turn. This is what
+  // fixes the OpenRouter/Anthropic 400:
+  //   "Conversation roles must alternate user/assistant/user/assistant…"
+  const rawTurns = [
     { role: 'system', content: MASTER_SYSTEM_PROMPT },
     ...(clientSystem ? [{ role: 'system', content: clientSystem }] : []),
     { role: 'user',   content: prompt },
   ];
+  const clean = sanitizeMessages(rawTurns);
+  const messages = (clean.system ? [{ role: 'system', content: clean.system }] : [])
+    .concat(clean.messages);
 
   let providerUsed = null;
   let completionChars = 0;

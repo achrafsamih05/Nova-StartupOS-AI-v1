@@ -159,5 +159,117 @@ suite('AI provider fallback chain', () => {
   });
 });
 
+/* ------------------- Message sanitizer (chat 400 fix) -------------- */
+suite('AI message sanitizer', () => {
+  const { sanitizeMessages } = require('../api/_lib/messages');
+
+  test('empty input → empty output', () => {
+    const out = sanitizeMessages([]);
+    assert.strictEqual(out.system, null);
+    assert.deepStrictEqual(out.messages, []);
+  });
+
+  test('hoists multiple leading system messages into one', () => {
+    const out = sanitizeMessages([
+      { role: 'system', content: 'A' },
+      { role: 'system', content: 'B' },
+      { role: 'user',   content: 'hi' },
+    ]);
+    assert.strictEqual(out.system, 'A\n\nB');
+    assert.deepStrictEqual(out.messages, [{ role: 'user', content: 'hi' }]);
+  });
+
+  test('collapses consecutive user turns (the actual bug fix)', () => {
+    const out = sanitizeMessages([
+      { role: 'system', content: 'Nova system' },
+      { role: 'user',   content: 'Workspace context: …' },
+      { role: 'user',   content: 'My actual question' },
+    ]);
+    assert.strictEqual(out.messages.length, 1);
+    assert.strictEqual(out.messages[0].role, 'user');
+    assert.ok(out.messages[0].content.indexOf('Workspace context') !== -1);
+    assert.ok(out.messages[0].content.indexOf('My actual question') !== -1);
+  });
+
+  test('collapses consecutive assistant turns', () => {
+    const out = sanitizeMessages([
+      { role: 'user',      content: 'q' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user',      content: 'q2' },
+    ]);
+    // user, assistant(a1+a2), user
+    assert.strictEqual(out.messages.length, 3);
+    assert.strictEqual(out.messages[1].role, 'assistant');
+    assert.strictEqual(out.messages[1].content, 'a1\n\na2');
+  });
+
+  test('demotes mid-conversation system to user and merges', () => {
+    const out = sanitizeMessages([
+      { role: 'user',   content: 'hello' },
+      { role: 'system', content: 'mid-rule (should be demoted)' },
+      { role: 'user',   content: 'world' },
+    ]);
+    assert.strictEqual(out.system, null);
+    assert.strictEqual(out.messages.length, 1);
+    assert.ok(out.messages[0].content.indexOf('mid-rule') !== -1);
+  });
+
+  test('drops trailing assistant turns', () => {
+    const out = sanitizeMessages([
+      { role: 'user',      content: 'q' },
+      { role: 'assistant', content: 'old reply' },
+    ]);
+    assert.strictEqual(out.messages.length, 1);
+    assert.strictEqual(out.messages[0].role, 'user');
+  });
+
+  test('prepends placeholder when conversation starts with assistant', () => {
+    const out = sanitizeMessages([
+      { role: 'assistant', content: 'Welcome!' },
+      { role: 'user',      content: 'help me' },
+    ]);
+    assert.strictEqual(out.messages.length, 3);
+    assert.strictEqual(out.messages[0].role, 'user');
+    assert.strictEqual(out.messages[1].role, 'assistant');
+    assert.strictEqual(out.messages[2].role, 'user');
+  });
+
+  test('drops empty/whitespace-only messages', () => {
+    const out = sanitizeMessages([
+      { role: 'system', content: '  ' },
+      { role: 'user',   content: '' },
+      { role: 'user',   content: 'real prompt' },
+    ]);
+    assert.strictEqual(out.system, null);
+    assert.strictEqual(out.messages.length, 1);
+    assert.strictEqual(out.messages[0].content, 'real prompt');
+  });
+
+  test('output strictly alternates user/assistant/user/...', () => {
+    const out = sanitizeMessages([
+      { role: 'system', content: 'sys' },
+      { role: 'user',   content: 'a' },
+      { role: 'user',   content: 'b' },
+      { role: 'assistant', content: 'c' },
+      { role: 'assistant', content: 'd' },
+      { role: 'user',   content: 'e' },
+      { role: 'system', content: 'mid' },
+      { role: 'user',   content: 'f' },
+    ]);
+    // Expected: system='sys', messages=[user(a+b), assistant(c+d), user(e+mid+f)]
+    assert.strictEqual(out.system, 'sys');
+    assert.strictEqual(out.messages.length, 3);
+    assert.strictEqual(out.messages[0].role, 'user');
+    assert.strictEqual(out.messages[1].role, 'assistant');
+    assert.strictEqual(out.messages[2].role, 'user');
+    // Walk the array — every adjacent pair must differ in role.
+    for (let i = 1; i < out.messages.length; i++) {
+      assert.notStrictEqual(out.messages[i].role, out.messages[i - 1].role,
+        'adjacent same-role found at index ' + i);
+    }
+  });
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

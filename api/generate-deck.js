@@ -27,6 +27,7 @@ const {
   checkRateLimit, incrementUsage, recordAiRequest, recordAudit,
   clientIp,
 } = require('./_lib/auth');
+const { sanitizeMessages } = require('./_lib/messages');
 
 const AI_DAILY_LIMIT = parseInt(process.env.AI_DAILY_LIMIT || '200', 10);
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY;
@@ -307,14 +308,23 @@ module.exports = async (req, res) => {
   const systemPrompt = buildSystemPrompt(ctx, Object.assign({ name: startupName }, startup), audience, locale);
   const userPrompt   = buildUserPrompt(startupName, locale);
 
+  // Sanitize before handing to providers (Anthropic enforces alternation,
+  // and a future change that adds prior turns would break otherwise).
+  const clean = sanitizeMessages([
+    { role: 'system', content: systemPrompt },
+    { role: 'user',   content: userPrompt },
+  ]);
+  const safeSystem = clean.system || systemPrompt;
+  const safeUser   = (clean.messages.find(function (m) { return m.role === 'user'; }) || { content: userPrompt }).content;
+
   // 6. Provider chain — Claude → OpenRouter Claude → OpenAI JSON-mode
   let providerUsed = null;
   let raw = null;
   let lastErr = null;
   const chain = [
-    { name: 'anthropic',         fn: () => callAnthropic(systemPrompt, userPrompt),       enabled: !!ANTHROPIC_KEY },
-    { name: 'openrouter-claude', fn: () => callOpenRouterClaude(systemPrompt, userPrompt), enabled: !!OPENROUTER_KEY },
-    { name: 'openai',            fn: () => callOpenAI(systemPrompt, userPrompt),          enabled: !!OPENAI_KEY },
+    { name: 'anthropic',         fn: () => callAnthropic(safeSystem, safeUser),       enabled: !!ANTHROPIC_KEY },
+    { name: 'openrouter-claude', fn: () => callOpenRouterClaude(safeSystem, safeUser), enabled: !!OPENROUTER_KEY },
+    { name: 'openai',            fn: () => callOpenAI(safeSystem, safeUser),          enabled: !!OPENAI_KEY },
   ].filter((c) => c.enabled);
 
   if (!chain.length) return jsonError(res, 503, 'No AI provider key is configured on the server (set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY).');
@@ -349,7 +359,7 @@ module.exports = async (req, res) => {
       user_id: profile.id,
       provider_name: providerUsed,
       model: providerUsed === 'anthropic' ? 'claude-3-5-sonnet' : (providerUsed === 'openai' ? 'gpt-4o-mini' : 'anthropic/claude-3.5-sonnet'),
-      prompt_chars: systemPrompt.length + userPrompt.length,
+      prompt_chars: safeSystem.length + safeUser.length,
       completion_chars: raw.length,
       status: 'ok',
       ip_address: ip,
