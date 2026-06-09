@@ -1,41 +1,41 @@
 // =====================================================================
-// Nova StartupOS AI — Project-aware Deck/Plan Generator (Bridge)
+// Nova StartupOS AI — Project-aware Deck/Plan Generator (v3)
 // ---------------------------------------------------------------------
 // Route:  POST /api/generate-deck
 //
-// Responsibility:
-//   1. Verify the caller's Supabase JWT.
-//   2. Read THIS project's `supabase_schema.sql` and
-//      `TECHNICAL_SPECIFICATION.md` from disk (bundled via vercel.json
-//      `includeFiles`).
-//   3. Compose a system prompt that grounds the LLM in our tech stack
-//      and the active startup's profile.
-//   4. Call Claude (Anthropic Messages API) with a strict JSON schema
-//      directive — falls back to OpenRouter `anthropic/claude-3.5-sonnet`
-//      and finally to OpenAI's JSON-mode if no Anthropic key is configured.
-//   5. Parse the response into a slides array and return it as JSON.
+// What changed (v3):
+//   • Replaced the deprecated `anthropic/claude-3.5-sonnet` hardcode
+//     with a fallback chain (Claude Sonnet 4 → Gemini 2.5 Pro → GPT-4o
+//     → GPT-4o-mini → DeepSeek). See api/_lib/aiProviders.js.
+//   • Added 3-attempt retry logic with exponential backoff per model.
+//   • Friendly user-facing error messages — no raw provider strings.
+//   • Structured monitoring log of every attempt.
+//   • Native Anthropic + OpenAI native paths still try first when their
+//     dedicated keys are configured; otherwise OpenRouter handles all.
 //
-// The frontend (`js/main.js#generateDeck`) calls this and feeds the
-// returned `slides` array into `paintDeck()` which renders the semantic
-// schema the PPTX exporter consumes.
+// Returns: { slides: [...], meta: { provider, model, slideCount, attempts } }
 // =====================================================================
 
 const {
-  applyCors, handlePreflight, jsonError, readJsonBody, verifyAuth,
+  handlePreflight, jsonError, readJsonBody, verifyAuth,
   checkRateLimit, incrementUsage, recordAiRequest, recordAudit,
   clientIp,
 } = require('./_lib/auth');
 const { sanitizeMessages } = require('./_lib/messages');
 const { classifyPrompt }   = require('./_lib/safetyGate');
 const projectContext       = require('./_lib/projectContext');
+const {
+  OPENROUTER_MODEL_CHAIN,
+  callOpenRouterWithFallback,
+  friendlyError,
+  diag,
+} = require('./_lib/aiProviders');
 
 const AI_DAILY_LIMIT = parseInt(process.env.AI_DAILY_LIMIT || '200', 10);
 const ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY;
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
 const OPENAI_KEY     = process.env.OPENAI_API_KEY;
 
-// Project context (schema + spec) is loaded by the shared module so the
-// /api/ai-stream endpoint and this one share a single warm cache.
 const loadProjectContext = projectContext.load;
 
 /* ---------------------- Prompt construction ---------------------- */
@@ -52,9 +52,9 @@ function buildSystemPrompt(ctx, startup, audience, locale) {
     : 'Style: concise sentences, prefer numbers, no Markdown.';
 
   let block = '';
-  if (ctx.schema) block += '\n\n[supabase_schema.sql]\n' + ctx.schema;
+  if (ctx.schema)   block += '\n\n[supabase_schema.sql]\n' + ctx.schema;
   if (ctx.schemaV2) block += '\n\n[supabase_schema_v2.sql]\n' + ctx.schemaV2;
-  if (ctx.spec)   block += '\n\n[TECHNICAL_SPECIFICATION.md]\n' + ctx.spec;
+  if (ctx.spec)     block += '\n\n[TECHNICAL_SPECIFICATION.md]\n' + ctx.spec;
 
   let profile = '';
   if (startup) {
@@ -110,9 +110,12 @@ function buildUserPrompt(startupName, locale) {
   );
 }
 
-/* -------------------------- LLM callers -------------------------- */
-async function callAnthropic(systemPrompt, userPrompt) {
+/* ---------------------- Native provider callers ----------------- */
+// Anthropic native — used only when ANTHROPIC_API_KEY is set, otherwise
+// OpenRouter handles Anthropic models.
+async function callAnthropicNative(systemPrompt, userPrompt) {
   if (!ANTHROPIC_KEY) throw new Error('anthropic_not_configured');
+  const t0 = Date.now();
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -121,47 +124,40 @@ async function callAnthropic(systemPrompt, userPrompt) {
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-3-5-sonnet-20241022',
+      // Claude Sonnet 4 (current). The previous `claude-3-5-sonnet-20241022`
+      // returns a 404 from Anthropic now.
+      model: 'claude-sonnet-4-20250514',
       max_tokens: 4096,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     }),
   });
-  if (!res.ok) throw new Error('anthropic_' + res.status + ':' + (await res.text()).slice(0, 200));
+  const durationMs = Date.now() - t0;
+  if (!res.ok) {
+    const errText = (await res.text().catch(() => '')).slice(0, 240);
+    diag.record({ event: 'ai.attempt', provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+                  status: res.status, durationMs, ok: false, error: errText });
+    const e = new Error('anthropic_' + res.status + ':' + errText);
+    e.status = res.status;
+    throw e;
+  }
   const data = await res.json();
   const text = data && data.content && data.content[0] && data.content[0].text;
-  if (!text) throw new Error('anthropic_empty_response');
-  return text;
+  if (!text) {
+    diag.record({ event: 'ai.attempt', provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+                  status: 200, durationMs, ok: false, empty: true });
+    throw new Error('anthropic_empty_response');
+  }
+  diag.record({ event: 'ai.success', provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+                durationMs, ok: true, completion_chars: text.length });
+  return { text, model: 'claude-sonnet-4-20250514', vendor: 'anthropic', durationMs };
 }
 
-async function callOpenRouterClaude(systemPrompt, userPrompt) {
-  if (!OPENROUTER_KEY) throw new Error('openrouter_not_configured');
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: 'Bearer ' + OPENROUTER_KEY,
-      'HTTP-Referer': 'https://novastartupos.ai',
-      'X-Title': 'Nova StartupOS AI',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'anthropic/claude-3.5-sonnet',
-      max_tokens: 4096,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userPrompt },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error('openrouter_' + res.status + ':' + (await res.text()).slice(0, 200));
-  const data = await res.json();
-  const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-  if (!text) throw new Error('openrouter_empty_response');
-  return text;
-}
-
-async function callOpenAI(systemPrompt, userPrompt) {
+// OpenAI native JSON-mode — used as the absolute last resort when neither
+// Anthropic nor OpenRouter responded.
+async function callOpenAINative(systemPrompt, userPrompt) {
   if (!OPENAI_KEY) throw new Error('openai_not_configured');
+  const t0 = Date.now();
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -171,35 +167,45 @@ async function callOpenAI(systemPrompt, userPrompt) {
     body: JSON.stringify({
       model: 'gpt-4o-mini',
       max_tokens: 4096,
-      response_format: { type: 'json_object' }, // forces JSON
+      response_format: { type: 'json_object' },
       messages: [
-        // OpenAI's JSON mode requires the word "json" in the prompt.
         { role: 'system', content: systemPrompt + '\n\nReply with a JSON object whose only key is "slides" containing the slides array.' },
         { role: 'user',   content: userPrompt + '\n\nReturn JSON of shape: {"slides":[...]}' },
       ],
     }),
   });
-  if (!res.ok) throw new Error('openai_' + res.status + ':' + (await res.text()).slice(0, 200));
+  const durationMs = Date.now() - t0;
+  if (!res.ok) {
+    const errText = (await res.text().catch(() => '')).slice(0, 240);
+    diag.record({ event: 'ai.attempt', provider: 'openai', model: 'gpt-4o-mini',
+                  status: res.status, durationMs, ok: false, error: errText });
+    const e = new Error('openai_' + res.status + ':' + errText);
+    e.status = res.status;
+    throw e;
+  }
   const data = await res.json();
   const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-  if (!text) throw new Error('openai_empty_response');
-  return text;
+  if (!text) {
+    diag.record({ event: 'ai.attempt', provider: 'openai', model: 'gpt-4o-mini',
+                  status: 200, durationMs, ok: false, empty: true });
+    throw new Error('openai_empty_response');
+  }
+  diag.record({ event: 'ai.success', provider: 'openai', model: 'gpt-4o-mini',
+                durationMs, ok: true, completion_chars: text.length });
+  return { text, model: 'gpt-4o-mini', vendor: 'openai', durationMs };
 }
 
 /* ----------------------- JSON parsing utils ---------------------- */
 function extractSlidesArray(text) {
   if (!text) return null;
-  // Strip code fences.
   let s = text.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
 
-  // Try direct parse first.
   try {
     const direct = JSON.parse(s);
     if (Array.isArray(direct)) return direct;
     if (direct && Array.isArray(direct.slides)) return direct.slides;
   } catch (_) {}
 
-  // Try the largest JSON array substring.
   const arrayMatch = s.match(/\[[\s\S]*\]/);
   if (arrayMatch) {
     try {
@@ -208,7 +214,6 @@ function extractSlidesArray(text) {
     } catch (_) {}
   }
 
-  // Try a "{...slides:[...]...}" object.
   const objMatch = s.match(/\{[\s\S]*"slides"[\s\S]*\}/);
   if (objMatch) {
     try {
@@ -250,10 +255,11 @@ module.exports = async (req, res) => {
   const { profile } = auth;
   const ip = clientIp(req);
 
-  // 2. Rate limit (shares the AI quota bucket)
+  // 2. Rate limit
   const rl = await checkRateLimit(profile.id, 'ai_requests', AI_DAILY_LIMIT);
   if (!rl.ok) {
-    await recordAiRequest({ user_id: profile.id, status: 'rate_limited', error_message: 'daily limit reached', ip_address: ip });
+    await recordAiRequest({ user_id: profile.id, status: 'rate_limited',
+                            error_message: 'daily limit reached', ip_address: ip });
     return jsonError(res, 429, 'Daily AI quota exhausted.', { limit: rl.limit, current: rl.current });
   }
 
@@ -264,15 +270,15 @@ module.exports = async (req, res) => {
   const audience    = String(body.audience || 'investors');
   const locale      = String(body.locale || 'ar');
 
-  // 4. Project context — bundled at deploy time (vercel.json includeFiles)
+  // 4. Project context
   const ctx = loadProjectContext();
 
   // 5. Prompts
   const systemPrompt = buildSystemPrompt(ctx, Object.assign({ name: startupName }, startup), audience, locale);
   const userPrompt   = buildUserPrompt(startupName, locale);
 
-  // 5b. Safety gate — same pattern as /api/ai-stream.
-  const safety = await classifyPrompt(userPrompt, { apiKey: process.env.OPENROUTER_API_KEY });
+  // 5b. Safety gate
+  const safety = await classifyPrompt(userPrompt, { apiKey: OPENROUTER_KEY });
   if (!safety.safe) {
     await Promise.all([
       recordAiRequest({ user_id: profile.id, status: 'blocked',
@@ -285,8 +291,7 @@ module.exports = async (req, res) => {
       { category: safety.category });
   }
 
-  // Sanitize before handing to providers (Anthropic enforces alternation,
-  // and a future change that adds prior turns would break otherwise).
+  // Sanitize message shape (alternation rules).
   const clean = sanitizeMessages([
     { role: 'system', content: systemPrompt },
     { role: 'user',   content: userPrompt },
@@ -294,62 +299,145 @@ module.exports = async (req, res) => {
   const safeSystem = clean.system || systemPrompt;
   const safeUser   = (clean.messages.find(function (m) { return m.role === 'user'; }) || { content: userPrompt }).content;
 
-  // 6. Provider chain — Claude → OpenRouter Claude → OpenAI JSON-mode
+  // 6. Provider chain — automatic fallback. Order:
+  //    1) Anthropic native (if ANTHROPIC_API_KEY set) — direct claude-sonnet-4
+  //    2) OpenRouter chain (claude-sonnet-4 → gemini-2.5-pro → gpt-4o → gpt-4o-mini → deepseek)
+  //    3) OpenAI native JSON-mode (last resort, if OPENAI_API_KEY set)
   let providerUsed = null;
+  let modelUsed = null;
   let raw = null;
+  let durationMs = 0;
+  let attemptsTrail = [];
   let lastErr = null;
-  const chain = [
-    { name: 'anthropic',         fn: () => callAnthropic(safeSystem, safeUser),       enabled: !!ANTHROPIC_KEY },
-    { name: 'openrouter-claude', fn: () => callOpenRouterClaude(safeSystem, safeUser), enabled: !!OPENROUTER_KEY },
-    { name: 'openai',            fn: () => callOpenAI(safeSystem, safeUser),          enabled: !!OPENAI_KEY },
-  ].filter((c) => c.enabled);
+  const startedAt = Date.now();
 
-  if (!chain.length) return jsonError(res, 503, 'No AI provider key is configured on the server (set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY).');
-
-  for (const c of chain) {
-    try {
-      providerUsed = c.name;
-      raw = await c.fn();
-      lastErr = null;
-      break;
-    } catch (e) {
-      lastErr = e;
+  // 6a. Try Anthropic native (3 attempts on transient failures).
+  if (!raw && ANTHROPIC_KEY) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const out = await callAnthropicNative(safeSystem, safeUser);
+        raw = out.text; providerUsed = 'anthropic'; modelUsed = out.model;
+        durationMs = out.durationMs;
+        attemptsTrail.push({ provider: 'anthropic', attempt, ok: true, durationMs: out.durationMs });
+        break;
+      } catch (e) {
+        lastErr = e;
+        const transient = !e.status || e.status === 408 || e.status === 429 || e.status >= 500;
+        attemptsTrail.push({ provider: 'anthropic', attempt, ok: false,
+                             error: (e.message || '').slice(0, 200), transient });
+        if (!transient) break; // permanent → fallthrough to next provider
+        if (attempt < 3) await new Promise(r => setTimeout(r, 200 * attempt));
+      }
     }
   }
 
-  if (lastErr || !raw) {
-    await recordAiRequest({ user_id: profile.id, provider_name: providerUsed, status: 'error', error_message: (lastErr && lastErr.message) || 'all_providers_failed', ip_address: ip });
-    return jsonError(res, 502, 'AI generation failed: ' + ((lastErr && lastErr.message) || 'all providers failed'));
+  // 6b. OpenRouter fallback chain (each model gets up to 3 attempts).
+  if (!raw && OPENROUTER_KEY) {
+    try {
+      const out = await callOpenRouterWithFallback({
+        apiKey: OPENROUTER_KEY,
+        chain: OPENROUTER_MODEL_CHAIN,
+        attempts: 3,
+        max_tokens: 4096,
+        messages: [
+          { role: 'system', content: safeSystem },
+          { role: 'user',   content: safeUser },
+        ],
+      });
+      raw = out.text; providerUsed = 'openrouter'; modelUsed = out.model;
+      durationMs = out.durationMs;
+      attemptsTrail = attemptsTrail.concat(out.attempts.map(a => Object.assign({ provider: 'openrouter' }, a)));
+    } catch (e) {
+      lastErr = e;
+      attemptsTrail = attemptsTrail.concat((e.attempts || []).map(a => Object.assign({ provider: 'openrouter' }, a)));
+    }
+  }
+
+  // 6c. OpenAI native JSON-mode (last-ditch).
+  if (!raw && OPENAI_KEY) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const out = await callOpenAINative(safeSystem, safeUser);
+        raw = out.text; providerUsed = 'openai'; modelUsed = out.model;
+        durationMs = out.durationMs;
+        attemptsTrail.push({ provider: 'openai', attempt, ok: true, durationMs: out.durationMs });
+        break;
+      } catch (e) {
+        lastErr = e;
+        const transient = !e.status || e.status === 408 || e.status === 429 || e.status >= 500;
+        attemptsTrail.push({ provider: 'openai', attempt, ok: false,
+                             error: (e.message || '').slice(0, 200), transient });
+        if (!transient) break;
+        if (attempt < 3) await new Promise(r => setTimeout(r, 200 * attempt));
+      }
+    }
+  }
+
+  if (!raw) {
+    const totalMs = Date.now() - startedAt;
+    diag.record({ event: 'deck.failed', totalMs, attempts: attemptsTrail,
+                  lastError: lastErr && lastErr.message });
+    await recordAiRequest({
+      user_id: profile.id, provider_name: providerUsed,
+      status: 'error',
+      error_message: ((lastErr && (lastErr.message || '')) || 'all_providers_failed').slice(0, 500),
+      ip_address: ip,
+    });
+    if (!ANTHROPIC_KEY && !OPENROUTER_KEY && !OPENAI_KEY) {
+      return jsonError(res, 503,
+        'AI service is not configured. Please contact support.');
+    }
+    return jsonError(res, 502,
+      friendlyError(lastErr, 'AI generation is temporarily unavailable. Please try again in a moment.'),
+      { attempts: attemptsTrail.length });
   }
 
   // 7. Parse + validate
   const slides = validateSlides(extractSlidesArray(raw));
   if (!slides || !slides.length) {
-    await recordAiRequest({ user_id: profile.id, provider_name: providerUsed, status: 'error', error_message: 'invalid_json_from_llm', ip_address: ip });
-    return jsonError(res, 502, 'AI returned an unparseable response. Try again.', { providerUsed, sample: String(raw).slice(0, 200) });
+    diag.record({ event: 'deck.parse_failed', provider: providerUsed, model: modelUsed,
+                  sample: String(raw).slice(0, 200) });
+    await recordAiRequest({
+      user_id: profile.id, provider_name: providerUsed, model: modelUsed,
+      status: 'error', error_message: 'invalid_json_from_llm', ip_address: ip,
+    });
+    return jsonError(res, 502,
+      'Nova received an unparseable response from the AI. Please try again.',
+      { providerUsed });
   }
 
-  // 8. Telemetry (fire-and-forget)
+  // 8. Telemetry
+  const totalMs = Date.now() - startedAt;
+  diag.record({
+    event: 'deck.success',
+    provider: providerUsed, model: modelUsed,
+    slideCount: slides.length, totalMs, attempts: attemptsTrail.length,
+  });
   await Promise.all([
     incrementUsage(profile.id, 'ai_requests', 1),
     recordAiRequest({
       user_id: profile.id,
       provider_name: providerUsed,
-      model: providerUsed === 'anthropic' ? 'claude-3-5-sonnet' : (providerUsed === 'openai' ? 'gpt-4o-mini' : 'anthropic/claude-3.5-sonnet'),
+      model: modelUsed,
       prompt_chars: safeSystem.length + safeUser.length,
       completion_chars: raw.length,
       status: 'ok',
       ip_address: ip,
     }),
     recordAudit(profile, 'deck.generated', 'generated_documents', null,
-                { provider: providerUsed, slides: slides.length, project_context: ctx.have }, ip),
+                { provider: providerUsed, model: modelUsed, slides: slides.length,
+                  total_ms: totalMs, attempts: attemptsTrail.length,
+                  project_context: ctx.have }, ip),
   ]).catch(() => {});
 
   return res.status(200).json({
     slides,
     meta: {
       provider: providerUsed,
+      model: modelUsed,
       slideCount: slides.length,
+      durationMs: totalMs,
+      attempts: attemptsTrail.length,
       projectContextLoaded: ctx.have,
     },
   });

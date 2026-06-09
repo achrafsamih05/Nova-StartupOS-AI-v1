@@ -265,14 +265,21 @@ create trigger trg_ai_providers_updated
 -- =====================================================================
 -- Pre-populate the 5 core providers so the Super Admin panel never boots
 -- into an empty state. OpenRouter is the default; tweak costs/priority later.
+--
+-- IMPORTANT (June 2026 hardening): the model identifiers below are the
+-- CURRENTLY-SUPPORTED OpenRouter slugs. Models we previously seeded
+-- (anthropic/claude-3.5-sonnet, google/gemini-flash-1.5) have been
+-- decommissioned by their vendors and now return
+-- "No endpoints found for ...". The supabase_schema_v2.sql migration
+-- contains an UPSERT that rewrites any old row to these new values.
 insert into public.ai_providers_config
   (provider_name, enabled, priority, input_cost_per_1k, output_cost_per_1k, is_default, default_model)
 values
-  ('openrouter', true,  1,  0.0005, 0.0015, true,  'google/gemini-flash-1.5'),
-  ('openai',     false, 2,  0.0050, 0.0150, false, 'gpt-4o-mini'),
-  ('anthropic',  false, 3,  0.0030, 0.0150, false, 'claude-3-5-sonnet'),
-  ('gemini',     false, 4,  0.0004, 0.0012, false, 'gemini-1.5-flash'),
-  ('deepseek',   false, 5,  0.0002, 0.0008, false, 'deepseek-chat')
+  ('openrouter', true,  1,  0.0005, 0.0015, true,  'anthropic/claude-sonnet-4'),
+  ('anthropic',  false, 2,  0.0030, 0.0150, false, 'anthropic/claude-sonnet-4'),
+  ('gemini',     false, 3,  0.0004, 0.0012, false, 'google/gemini-2.5-pro'),
+  ('openai',     false, 4,  0.0050, 0.0150, false, 'openai/gpt-4o'),
+  ('deepseek',   false, 5,  0.0002, 0.0008, false, 'deepseek/deepseek-chat')
 on conflict (provider_name) do nothing;
 
 

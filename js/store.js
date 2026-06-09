@@ -17,7 +17,7 @@
     activeStartupId: null,
     settings: {
       apiKey: '',                              // OpenRouter key (stored locally only)
-      model: 'openai/gpt-4o-mini',
+      model: 'anthropic/claude-sonnet-4',
       demoMode: true,                          // demo mode ON until a key is added
       theme: 'dark',
       emailNotifications: true,

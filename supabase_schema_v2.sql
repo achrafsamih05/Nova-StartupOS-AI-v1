@@ -425,5 +425,42 @@ create policy "startup_logos_auth_update"
 
 
 -- =====================================================================
+-- 5. MODEL MIGRATION (June 2026 hardening)
+-- ---------------------------------------------------------------------
+-- The previous default models for some providers have been retired by
+-- their vendors and now return "No endpoints found for ..." from
+-- OpenRouter. Rewrite any old default_model values stored in
+-- ai_providers_config to their current equivalents. Idempotent.
+-- =====================================================================
+update public.ai_providers_config
+   set default_model = 'anthropic/claude-sonnet-4'
+ where default_model in (
+   'anthropic/claude-3.5-sonnet',
+   'anthropic/claude-3-5-sonnet',
+   'anthropic/claude-3-5-sonnet-20241022',
+   'claude-3-5-sonnet',
+   'claude-3-5-sonnet-20241022',
+   'claude-3.5-sonnet'
+ );
+
+update public.ai_providers_config
+   set default_model = 'google/gemini-2.5-pro'
+ where default_model in (
+   'google/gemini-flash-1.5',
+   'google/gemini-pro-1.5',
+   'gemini-1.5-flash',
+   'gemini-1.5-pro'
+ );
+
+-- Make sure the default OpenRouter row points at a current model. If a
+-- new install seeded the v1 schema before this migration ran, this
+-- corrects it. Safe to re-run.
+update public.ai_providers_config
+   set default_model = 'anthropic/claude-sonnet-4'
+ where provider_name = 'openrouter'
+   and (default_model is null or default_model = '');
+
+
+-- =====================================================================
 -- DONE.
 -- =====================================================================

@@ -426,3 +426,91 @@ Real AI business plan generation, real AI pitch deck generation, real readiness 
 4. Replace `Math.random()` readiness scoring and hardcoded billing/analytics with real backed data.
 5. Audit all `innerHTML` interpolations in admin tables for XSS, especially the `JSON.stringify` in attribute strings.
 6. Add a minimal rate limiter on `/api/ai-stream` (per-user token budget) before exposing real keys.
+
+
+---
+
+## PHASE 4 — JUNE 2026 PRODUCTION HARDENING
+
+> Fix bundle for: deprecated OpenRouter models, mobile horizontal overflow,
+> and Pitch Deck generation failures.
+
+### Issues Resolved
+
+| # | Issue | Root Cause | Fix |
+|---|---|---|---|
+| 1 | `No endpoints found for anthropic/claude-3.5-sonnet` | OpenRouter retired `claude-3.5-sonnet` and `gemini-flash-1.5`; hardcoded in `api/generate-deck.js`, `js/ai.js`, `supabase_schema.sql` | New shared module `api/_lib/aiProviders.js` with `OPENROUTER_MODEL_CHAIN`, `DEPRECATED_MODEL_MAP`, `normalizeModel()`. Schema seeded with current ids. |
+| 2 | Single-model deck generator with no retry | `callOpenRouterClaude()` hit one model, errored, surfaced raw text | `callOpenRouterWithFallback()` walks 5-model chain × 3 attempts each with exponential backoff. |
+| 3 | Stale model name in DB | Existing rows in `ai_providers_config.default_model` could still hold the deprecated string | Idempotent `update ... where default_model in (...)` migration in `supabase_schema_v2.sql`. |
+| 4 | Raw provider errors leaking to UI | "Generation failed: openrouter_404: No endpoints found..." reached toast | Server returns friendly text via `friendlyError()`; client also has a defensive translator. |
+| 5 | Horizontal overflow on mobile | `.aur` blobs (600px), `#cta` 600×400 absolute glow, `.db-main { margin-left: 240px }` not clamped, third-party inline widths | Hardened `css/nova.css` with `html, body { max-width: 100% }`, `section { overflow-x: clip }`, mobile `@media (max-width: 991px)` `.db-main { margin-left: 0 !important }`, `[style*="width:600px"] { max-width: 100% !important }`, plus runtime `clampViewport()` safety net in `main.js`. |
+| 6 | No diagnostics for AI failures | Errors swallowed into `ai_requests.error_message` only | `diag.record({...})` writes a structured JSON line per attempt; Vercel log drains catch them. Each request stores `attempts` count in `audit_logs.metadata`. |
+| 7 | Front-end model menu offered retired models | `js/ai.js` MODELS array | Replaced with current chain. |
+
+### New / Modified Files
+
+```
+api/_lib/aiProviders.js     NEW   Shared chain + retry + diagnostics
+api/generate-deck.js        REWRITE  Native + OpenRouter chain, friendly errors
+api/ai-stream.js            REWRITE  Same pattern, plus OpenRouter chain fallback
+                                     for stream mode
+js/ai.js                    EDIT  MODELS list updated to current OpenRouter ids
+js/store.js                 EDIT  Default model -> anthropic/claude-sonnet-4
+js/main.js                  EDIT  Friendly toasts for deck/plan failures;
+                                  appended runtime overflow safeguard
+css/nova.css                APPEND  Mobile responsiveness rules
+supabase_schema.sql         EDIT  Seeds use current model identifiers
+supabase_schema_v2.sql      APPEND Idempotent migration for old default_models
+tests/run.js                EDIT  +5 tests covering aiProviders helpers
+```
+
+### Provider Chain (priority order)
+
+1. `anthropic/claude-sonnet-4` — Claude Sonnet 4 (preferred for deck JSON quality)
+2. `google/gemini-2.5-pro` — secondary
+3. `openai/gpt-4o`
+4. `openai/gpt-4o-mini`
+5. `deepseek/deepseek-chat`
+
+The deck endpoint additionally tries the Anthropic native API first
+(when `ANTHROPIC_API_KEY` is set) and falls through to OpenAI's JSON-mode
+as a last resort. Each provider is retried up to 3 times with exponential
+backoff before moving to the next one.
+
+### Mobile Hardening Summary
+
+- `html, body { max-width: 100%; overflow-x: hidden }`
+- `section, .sp { overflow-x: clip }`
+- `.db-main, .db-top { margin-left: 0 !important }` ≤ 991px
+- `.db-dropdown { max-width: calc(100vw - 28px) }` ≤ 575px
+- `[style*="width:600px"] { max-width: 100% !important }`
+- Runtime `clampViewport()` walks top-level body children if
+  `documentElement.scrollWidth > window.innerWidth`.
+
+### Verification
+
+```
+$ node tests/run.js
+30 passed, 0 failed
+```
+
+The new `aiProviders` test group asserts:
+- The active model chain contains zero deprecated identifiers.
+- `normalizeModel()` rewrites every old alias.
+- `friendlyError()` translates raw provider strings.
+- Safety classifier models can never leak into a generation call.
+
+### Migration Steps for Operators
+
+1. Pull latest code, redeploy Vercel.
+2. Run `supabase_schema_v2.sql` against the Supabase project (idempotent).
+3. (Optional) In Super Admin → AI Engine, confirm provider rows show
+   `anthropic/claude-sonnet-4` or `google/gemini-2.5-pro` as their default
+   model. Older values are auto-migrated by the SQL above.
+4. Smoke-test:
+   - Login → Dashboard → Pitch Decks → "Generate Deck" — must succeed
+     without a "No endpoints found" toast.
+   - Open the same dashboard at 320 px width (Chrome DevTools) — no
+     horizontal scroll, no black bar on the right.
+   - Business Plan generation must continue to work as before.
+

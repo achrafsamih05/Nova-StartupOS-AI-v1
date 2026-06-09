@@ -107,12 +107,14 @@
     isConfigured: isConfigured,
     buildSystemPrompt: buildSystemPrompt,
     SYSTEM_PROMPT: SYSTEM_PROMPT,
+    // Models offered in the Settings → AI Engine selector. Order matches
+    // the server's automatic fallback chain so users see what Nova will
+    // try first. Keep this list in sync with api/_lib/aiProviders.js.
     MODELS: [
+      { id: 'anthropic/claude-sonnet-4',           label: 'Claude Sonnet 4 (recommended)' },
+      { id: 'google/gemini-2.5-pro',               label: 'Gemini 2.5 Pro' },
+      { id: 'openai/gpt-4o',                       label: 'GPT-4o' },
       { id: 'openai/gpt-4o-mini',                  label: 'GPT-4o mini (fast, cheap)' },
-      { id: 'openai/gpt-4o',                       label: 'GPT-4o (high quality)' },
-      { id: 'anthropic/claude-3.5-sonnet',         label: 'Claude 3.5 Sonnet' },
-      { id: 'google/gemini-flash-1.5',             label: 'Gemini 1.5 Flash' },
-      { id: 'meta-llama/llama-3.1-70b-instruct',   label: 'Llama 3.1 70B' },
       { id: 'deepseek/deepseek-chat',              label: 'DeepSeek Chat' },
     ],
   };

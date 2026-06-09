@@ -567,3 +567,123 @@ a:focus-visible,
 .nova-table tbody tr:last-child td {
   border-bottom: none;
 }
+
+
+/* =====================================================================
+   MOBILE RESPONSIVENESS HARDENING (Nova v3 — June 2026)
+   ---------------------------------------------------------------------
+   Goal: zero horizontal scroll from 320px upward on every page (landing
+   + dashboard). The previous build leaked the dashboard sidebar's
+   width into the layout via `.db-main { margin-left: 240px }` and a
+   handful of fixed-width inline styles. The rules below clamp every
+   container to 100% of the viewport without altering desktop layout.
+   ===================================================================== */
+
+/* Global guardrails — viewport never overflows, regardless of inline
+   styles a third-party widget might inject later. `body` already had
+   `overflow-x: hidden`; we add `max-width: 100%` to both root elements
+   for belt-and-braces protection on iOS Safari. */
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* Bootstrap's .container can break out of small viewports if
+   inadvertently nested inside a wider element. Lock its max-width. */
+.container, .container-fluid {
+  max-width: 100%;
+}
+
+/* Decorative aurora blobs (`.aur`) are positioned with negative offsets
+   that easily exceed the viewport. They never receive interaction, so
+   we rely on the parent's `overflow: hidden` — but we also cap their
+   own size on small screens so a missing parent overflow doesn't stretch
+   the document. */
+.aur { max-width: 100vw; }
+@media (max-width: 575px) {
+  .aur-a { width: 320px; height: 320px; }
+  .aur-b { width: 280px; height: 280px; }
+}
+
+/* Every section on the landing page should clip its own decoration so
+   no outer scrollbar appears even if `body { overflow-x }` is overridden
+   by a future regression. */
+section, .sp { overflow-x: clip; }
+@supports not (overflow-x: clip) {
+  section, .sp { overflow-x: hidden; }
+}
+
+/* The `#cta` section has a 600x400 absolute glow that ALWAYS exceeds a
+   mobile viewport. Constrain it. */
+#cta { overflow: hidden; }
+#cta > div[style*="width:600px"] {
+  width: min(600px, 100vw) !important;
+  height: min(400px, 70vw) !important;
+}
+
+/* Dashboard layout: the sidebar pushes `.db-main` by var(--dsb)=240px
+   on desktop. On mobile it collapses (transform: translateX(-100%)),
+   but the `margin-left` was kept by the original CSS, leaking width.
+   The existing @media (max-width: 991px) rule already zeroes
+   `db-main { margin-left: 0 }` — we strengthen it here so it can never
+   be overridden by an inline style. */
+@media (max-width: 991px) {
+  .db-main, .db-top { left: 0 !important; margin-left: 0 !important; }
+  /* Make sure section content never overflows on mobile: */
+  .db-content { padding: 18px 14px !important; }
+  /* The deck preview ppt-grid switches to single column from 575px down
+     and shrinks the min cell width so it fits. */
+  #sec-decks .ppt-grid { grid-template-columns: 1fr !important; gap: 14px; }
+}
+
+@media (max-width: 575px) {
+  /* Search box hidden via Bootstrap; ensure top-bar doesn't overflow. */
+  .db-top { padding: 0 14px !important; gap: 10px !important; }
+  /* Notification & profile dropdowns must fit a 320px viewport. */
+  .db-dropdown { min-width: min(360px, calc(100vw - 28px)) !important;
+                 max-width: calc(100vw - 28px) !important;
+                 right: 0 !important; }
+  /* Login offcanvas (.lofc) was 420px — handled by the existing rule
+     that switches to width: 100% on small viewports — but also belt
+     this with max-width here. */
+  #lofc { max-width: 100vw !important; }
+  /* Pitch deck card stays inside the viewport. */
+  #sec-decks .ppt-card { padding: 10px; }
+  /* Stat cards on overview were full-width; numeric values shouldn't
+     blow out the card. */
+  .db-stat-val { font-size: 1.6rem !important; }
+  /* Toolbar / heading rows go vertical on tiny screens. */
+  .db-section .d-flex.justify-content-between.flex-wrap { gap: 10px !important; }
+  .pamt { font-size: 2.2rem; }
+  /* Filter pill rows must not overflow horizontally. */
+  .filter-pill { font-size: 0.78rem; padding: 6px 12px; }
+}
+
+/* Long content (long URLs, long token strings) must wrap rather than
+   force horizontal scroll. The chat already does this via word-break.
+   Cover other text-heavy rows: */
+.nova-doc, .nova-doc p, .nova-doc li, .reco-item p, .agent-card p {
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Tables in the Billing Center use overflow:auto — keep their host
+   panel from leaking width. */
+.nova-panel > div[style*="overflow:auto"] { max-width: 100%; }
+
+/* Charts must shrink with their host card. Chart.js sets canvas height
+   inline; we cap the width to 100% so a long readiness-radar label list
+   can't push the canvas wider than the viewport. */
+canvas { max-width: 100% !important; height: auto !important; }
+
+/* Inline-style `min-width: 360px` on notifDropdown is fine on desktop;
+   already handled by the @media (max-width: 575px) rule above. */
+
+/* Defensive: any element with an inline `width: 600px` (the CTA glow)
+   or similar oversized inline width should not break the document. */
+[style*="width:600px"], [style*="width: 600px"] {
+  max-width: 100% !important;
+}
+
+/* Final safety net: image, video, iframe never exceed their container. */
+img, video, iframe { max-width: 100%; }

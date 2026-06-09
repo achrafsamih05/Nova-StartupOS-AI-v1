@@ -159,6 +159,60 @@ suite('AI provider fallback chain', () => {
   });
 });
 
+/* --------- Centralized AI provider helpers (deck/stream) ---------- */
+suite('AI provider helpers (aiProviders.js)', () => {
+  const {
+    OPENROUTER_MODEL_CHAIN, DEPRECATED_MODEL_MAP,
+    normalizeModel, isSafetyModel, friendlyError,
+  } = require('../api/_lib/aiProviders');
+
+  test('chain has the required current models in priority order', () => {
+    const ids = OPENROUTER_MODEL_CHAIN.map(m => m.id);
+    assert.strictEqual(ids[0], 'anthropic/claude-sonnet-4');
+    assert.strictEqual(ids[1], 'google/gemini-2.5-pro');
+    assert.ok(ids.includes('openai/gpt-4o'));
+    assert.ok(ids.includes('openai/gpt-4o-mini'));
+    assert.ok(ids.includes('deepseek/deepseek-chat'));
+  });
+
+  test('chain contains zero deprecated model identifiers', () => {
+    const ids = OPENROUTER_MODEL_CHAIN.map(m => m.id);
+    Object.keys(DEPRECATED_MODEL_MAP).forEach(old => {
+      assert.ok(!ids.includes(old), 'deprecated model still in chain: ' + old);
+    });
+    assert.ok(!ids.some(id => /claude-3\.5|gemini-flash-1\.5|claude-3-5-sonnet/i.test(id)),
+      'chain still references a retired model name');
+  });
+
+  test('normalizeModel rewrites every deprecated alias', () => {
+    assert.strictEqual(normalizeModel('anthropic/claude-3.5-sonnet'), 'anthropic/claude-sonnet-4');
+    assert.strictEqual(normalizeModel('claude-3-5-sonnet-20241022'),  'anthropic/claude-sonnet-4');
+    assert.strictEqual(normalizeModel('google/gemini-flash-1.5'),     'google/gemini-2.5-pro');
+    assert.strictEqual(normalizeModel('gemini-1.5-pro'),              'google/gemini-2.5-pro');
+    // Current model is preserved.
+    assert.strictEqual(normalizeModel('anthropic/claude-sonnet-4'),   'anthropic/claude-sonnet-4');
+  });
+
+  test('isSafetyModel rejects classifier identifiers', () => {
+    assert.strictEqual(isSafetyModel('nvidia/llama-3.1-nemotron-content-safety'), true);
+    assert.strictEqual(isSafetyModel('llamaguard/something'), true);
+    assert.strictEqual(isSafetyModel('anthropic/claude-sonnet-4'), false);
+    assert.strictEqual(isSafetyModel(''), false);
+  });
+
+  test('friendlyError translates raw provider strings', () => {
+    const ne = friendlyError(new Error('No endpoints found for anthropic/claude-3.5-sonnet'));
+    assert.ok(/temporarily unavailable/i.test(ne) && /switching/i.test(ne));
+    const re = friendlyError(new Error('openrouter_429: rate limit'));
+    assert.ok(/rate.?limit/i.test(re));
+    const ce = friendlyError(new Error('openrouter_503: service unavailable'));
+    assert.ok(/hiccup|temporarily/i.test(ce));
+    // Default fallback message
+    const fb = friendlyError(new Error('something exotic'), 'CUSTOM');
+    assert.strictEqual(fb, 'CUSTOM');
+  });
+});
+
 /* ------------------- Message sanitizer (chat 400 fix) -------------- */
 suite('AI message sanitizer', () => {
   const { sanitizeMessages } = require('../api/_lib/messages');

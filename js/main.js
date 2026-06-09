@@ -414,7 +414,21 @@ function generatePlan(e) {
     },
     (err)   => {
       setLoading('bpBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Business Plan');
-      sectionsEl.innerHTML = '<div class="doc-section" style="color:#f87171"><i class="fa-solid fa-triangle-exclamation me-2"></i>Could not generate plan: ' + escapeHtml(err.message || 'unknown error') + '</div>';
+      // User-friendly message — never expose raw provider errors.
+      var raw = (err && err.message) || '';
+      var friendly;
+      if (err && err.status === 429) {
+        friendly = 'Daily AI quota reached. Please try again tomorrow.';
+      } else if (err && err.status === 422) {
+        friendly = 'This request was flagged by the content safety classifier.';
+      } else if (/no endpoints found/i.test(raw)) {
+        friendly = 'The selected AI model is temporarily unavailable. Nova is switching to another provider automatically.';
+      } else if (/all_providers_failed|all_models_failed|temporarily unavailable/i.test(raw)) {
+        friendly = 'Nova tried multiple providers but none responded. Please try again in a moment.';
+      } else {
+        friendly = 'Could not generate the business plan right now. Please try again.';
+      }
+      sectionsEl.innerHTML = '<div class="doc-section" style="color:#f87171"><i class="fa-solid fa-triangle-exclamation me-2"></i>' + escapeHtml(friendly) + '</div>';
     }
   );
 }
@@ -604,13 +618,28 @@ async function generateDeck() {
   } catch (err) {
     if (wrap) wrap.innerHTML = '';
     document.getElementById('pdEmpty').style.display = 'flex';
+    // Translate raw provider errors to user-friendly messages. Server
+    // already does this via friendlyError(); we add a defensive shim
+    // for any direct/legacy strings the client might receive.
+    var raw = (err && err.message) || '';
+    var friendly;
     if (err && err.status === 429) {
-      novaToast('Daily AI quota reached — try again tomorrow.');
+      friendly = 'Daily AI quota reached. Please try again tomorrow.';
     } else if (err && err.status === 503) {
-      novaToast('AI provider not configured on the server.');
+      friendly = 'AI service is temporarily unavailable. Please try again shortly.';
+    } else if (/no endpoints found/i.test(raw)) {
+      friendly = 'The selected AI model is temporarily unavailable. Nova is switching to another provider automatically.';
+    } else if (/all_providers_failed|all_models_failed/i.test(raw)) {
+      friendly = 'Nova tried multiple providers but none responded. Please try again in a moment.';
+    } else if (/unparseable|invalid_json/i.test(raw)) {
+      friendly = 'Nova received an unexpected response from the AI. Please try again.';
+    } else if (err && err.body && err.body.error) {
+      // Server-supplied friendly text via api/generate-deck.
+      friendly = err.body.error;
     } else {
-      novaToast('Generation failed: ' + (err.message || 'unknown error'));
+      friendly = 'Pitch deck generation failed. Please try again in a moment.';
     }
+    novaToast(friendly);
   } finally {
     setLoading('pdBtn', false, '<i class="fa-solid fa-wand-magic-sparkles me-2"></i>Generate Deck');
   }
@@ -1870,3 +1899,51 @@ if (window.NovaApi && NovaApi.supabase) {
     }
   });
 }
+
+
+/* =====================================================================
+   MOBILE OVERFLOW SAFEGUARD (Nova v3 — June 2026)
+   ---------------------------------------------------------------------
+   Belt-and-braces runtime check: if anything ever pushes the document
+   wider than the viewport (a stray inline style, a third-party widget,
+   an embedded iframe), we re-clamp it. This keeps `scrollWidth` from
+   ever exceeding `innerWidth`, eliminating the "large black empty area
+   on the right" symptom on mobile.
+   ===================================================================== */
+(function () {
+  if (typeof document === 'undefined') return;
+  function clampViewport() {
+    try {
+      var doc = document.documentElement;
+      var w = window.innerWidth;
+      if (!doc || !w) return;
+      // Only act when we actually overflow — otherwise skip the work.
+      if (doc.scrollWidth <= w + 1) return;
+      // Walk top-level body children and clamp anything wider than the
+      // viewport. This is cheap (O(top-level-children)) and handles the
+      // common case where a single absolute element broke out.
+      var body = document.body; if (!body) return;
+      var kids = body.children;
+      for (var i = 0; i < kids.length; i++) {
+        var el = kids[i];
+        if (el.offsetWidth && el.offsetWidth > w) {
+          el.style.maxWidth = '100vw';
+          el.style.overflowX = 'hidden';
+        }
+      }
+    } catch (_) { /* never throw from a safety net */ }
+  }
+  // Run once after first paint, then debounce on resize/orientation.
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(clampViewport, 50);
+  } else {
+    document.addEventListener('DOMContentLoaded', function () { setTimeout(clampViewport, 50); });
+  }
+  var t;
+  window.addEventListener('resize', function () {
+    clearTimeout(t); t = setTimeout(clampViewport, 120);
+  });
+  window.addEventListener('orientationchange', function () {
+    clearTimeout(t); t = setTimeout(clampViewport, 200);
+  });
+})();
